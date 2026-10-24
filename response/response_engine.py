@@ -1161,7 +1161,14 @@ class ResponseWorker:
             expires_at = _safe_float(entry.get("expires_at"), 0.0)
             entry_ceiling = expires_at > 0 and now >= expires_at
 
-            if release_all or entry_ceiling:
+            # Fail2ban blocks honour their own bantime and must not
+            # be released simply because state dropped below ORANGE.
+            # State-path blocks release on de-escalation; fail2ban
+            # blocks release only when their expires_at arrives.
+            source = entry.get("source", "")
+            is_fail2ban = source == "fail2ban"
+
+            if entry_ceiling or (release_all and not is_fail2ban):
                 ok = True
                 err = ""
                 if names:
@@ -1195,6 +1202,8 @@ class ResponseWorker:
                 self.isolation_ports = []
                 self.isolation_started_at = 0.0
                 self.escalation_reason = ""
+
+    
 
     def _apply_ip_block(self, now: float, attacker_ip: str) -> None:
         if self.service_ports:
