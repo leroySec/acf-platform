@@ -991,7 +991,6 @@ class EventLogBackend(Backend):
         if process_name is not None:
             record["process_name"] = process_name
         return record
-
     def _record_from_xml(self, xml):
         rec = None
         m = re.search(r'<EventRecordID>(\d+)</EventRecordID>', xml)
@@ -1020,6 +1019,16 @@ class EventLogBackend(Backend):
         message = data.get("payload") or data.get("Payload")
         if message is not None:
             message = message.strip() or None
+
+        # OpenSSH payloads carry the username inside the message
+        # text ("Failed password for <user> from ..."). Extract it
+        # when the Windows Security fields are absent.
+        if user is None and isinstance(message, str) and message:
+            um = re.search(
+                r'Failed password for (?:invalid user )?(\S+) from',
+                message)
+            if um:
+                user = um.group(1)
 
         return self._make_record(
             eid, rec, ts, _extract_ips(xml),
