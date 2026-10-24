@@ -1,0 +1,968 @@
+#!/usr/bin/env python3
+# ============================================================================
+# LAYER MANAGER — Start and manage layer engines and non-layer transports
+# ============================================================================
+# Supervision of layer engines and non-layer transports.
+#
+# UPDATED:
+#   - "reader" is registered in Config.ENGINE_MAP as a supervised transport.
+#   - NEVER_DISABLE: units that are never auto-disabled (reader).
+#     On FAILED they retry forever on the backoff schedule.
+#   - HEARTBEAT_TIMEOUTS: per-unit heartbeat timeouts. Reader gets 50 s
+#     to match its own watchdog; layers keep 30 s.
+#   - _write_snapshot: each entry carries unit_type ("transport" | "layer").
+#
+# Supervision contract (this iteration)
+# -------------------------------------
+#   The supervisor must not start a replacement while the current
+#   process is alive. When a RUNNING unit is transitioned out of
+#   RUNNING because its heartbeat check failed, the process is
+#   terminated first, then the failure is recorded, then the next
+#   cycle is free to start a replacement. This closes the defect
+#   where a stale-heartbeat determination left the old process
+#   running while the supervisor spawned a new one.
+#
+#   Liveness is checked against the process handle, not the
+#   heartbeat file. A stale heartbeat on a live process is a
+#   degraded condition, not a failure. It emits one warning per
+#   timeout window and the unit stays RUNNING.
+# ============================================================================
+
+import os
+import sys
+import json
+import time
+import subprocess
+import signal
+import atexit
+import threading
+import getpass
+import shutil
+from typing import Dict, List, Optional, Tuple
+
+from platform_utils import acquire_lock, release_lock, get_temp_dir
+from config import Config
+import process_tree
+
+try:
+    from event_emit import emit
+except ImportError:
+    def emit(src, layer, level, msg):
+        ts = time.strftime("%H:%M:%S")
+        print(f"[{ts}][{src}][{layer}][{level.upper()}] {msg}")
+
+
+class AdoptedProcess:
+    """
+    Wraps a psutil.Process so it presents the subset of subprocess.Popen
+    that layer_manager uses: .pid, .poll(), .wait(), .terminate(), .kill().
+
+    Retained for compatibility. With kill_orphans active, this class is
+    no longer used to adopt processes at startup.
+    """
+
+    def __init__(self, psutil_proc):
+        self._proc = psutil_proc
+        self.pid = psutil_proc.pid
+        self._dead = False
+
+    def poll(self):
+        if self._dead:
+            return 0
+        try:
+            import psutil
+            if self._proc.is_running() and self._proc.status() != psutil.STATUS_ZOMBIE:
+                return None
+        except Exception:
+            pass
+        self._dead = True
+        return 0
+
+    def wait(self, timeout=None):
+        import psutil
+        try:
+            self._proc.wait(timeout=timeout)
+        except psutil.TimeoutExpired:
+            raise subprocess.TimeoutExpired(cmd="adopted", timeout=timeout)
+        except psutil.NoSuchProcess:
+            pass
+        self._dead = True
+        return 0
+
+    def terminate(self):
+        import psutil
+        try:
+            self._proc.terminate()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
+    def kill(self):
+        import psutil
+        try:
+            self._proc.kill()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
+
+# ----------------------------------------------------------------------
+# Constants
+# ----------------------------------------------------------------------
+SYSTEM_CONFIG_FILE = "system_config.json"
+BLACKBOARD_FILE = Config.BLACKBOARD_FILE
+LOG_FILE = Config.LOG_FILE
+PID_FILE = os.path.join(get_temp_dir(), "acf_layer_manager.pid")
+STATE_FILE = os.path.join(get_temp_dir(), "acf_layer_manager_state.json")
+LAYER_STATE_FILE = Config.LAYER_STATE_FILE
+LAYER_COMMAND_FILE = Config.LAYER_COMMAND_FILE
+LAYER_RESULT_FILE = Config.LAYER_RESULT_FILE
+
+DEFAULT_BACKOFF_DELAYS = [5, 15, 45, 120]
+DEFAULT_MAX_FAILURES_BEFORE_DISABLE = 3
+DEFAULT_HEARTBEAT_TIMEOUT = 30
+HEARTBEAT_STALE_MULTIPLIER = 5
+DEFAULT_MONITOR_INTERVAL = 5
+
+DEFAULT_HEARTBEAT_TIMEOUTS = getattr(
+    Config, "HEARTBEAT_TIMEOUTS",
+    {"default": 30, "reader": 50},
+)
+DEFAULT_NEVER_DISABLE = set(getattr(Config, "NEVER_DISABLE", {"reader"}))
+
+DEFAULT_LAYER_SCRIPTS = Config.ENGINE_MAP
+
+SRC = "layer_manager"
+
+
+# ----------------------------------------------------------------------
+# Audit Logging
+# ----------------------------------------------------------------------
+def audit_log(message: str):
+    try:
+        with open(LOG_FILE, "a") as f:
+            user = getpass.getuser()
+            f.write(f"[LAYER_MANAGER] {time.ctime()} | User: {user} | {message}\n")
+    except Exception as e:
+        emit(SRC, "-", "error", f"Audit log write failed: {e}")
+
+
+# ----------------------------------------------------------------------
+# PID File
+# ----------------------------------------------------------------------
+def acquire_pid_file() -> bool:
+    try:
+        with open(PID_FILE, 'w') as f:
+            acquire_lock(f.fileno(), exclusive=True)
+            f.write(str(os.getpid()))
+            f.truncate()
+            release_lock(f.fileno())
+        return True
+    except Exception:
+        return False
+
+
+def release_pid_file():
+    try:
+        if os.path.exists(PID_FILE):
+            os.remove(PID_FILE)
+    except Exception:
+        pass
+
+
+# ----------------------------------------------------------------------
+# State Persistence
+# ----------------------------------------------------------------------
+def load_state() -> Dict:
+    try:
+        with open(STATE_FILE, 'r') as f:
+            return json.load(f)
+    except Exception:
+        return {"failure_count": {}, "backoff_level": {}, "last_failure_time": {}}
+
+
+def save_state(state: Dict):
+    try:
+        with open(STATE_FILE, 'w') as f:
+            json.dump(state, f, indent=2)
+    except Exception as e:
+        audit_log(f"Failed to save state: {e}")
+
+
+# ----------------------------------------------------------------------
+# Orphan Cleanup
+# ----------------------------------------------------------------------
+def kill_orphans():
+    """
+    Kill any process matching an engine script that is not in the
+    current engines dict. With the kill-on-close job active, orphans
+    cannot survive the orchestrator's exit; this is the fallback for
+    anything that escaped the job.
+    """
+    try:
+        import psutil
+    except ImportError:
+        emit(SRC, "-", "warn",
+             "psutil not installed. Orphan cleanup skipped.")
+        return
+
+    layer_scripts = get_layer_scripts()
+    script_names = [s for s in layer_scripts.values() if s]
+    if not script_names:
+        return
+
+    managed_pids = {os.getpid()}
+    for p in engines.values():
+        try:
+            if p.poll() is None:
+                managed_pids.add(p.pid)
+        except Exception:
+            pass
+
+    for proc in psutil.process_iter(['pid', 'cmdline']):
+        try:
+            cmdline = proc.info.get('cmdline')
+            if not cmdline:
+                continue
+            joined = " ".join(cmdline)
+            if proc.pid in managed_pids:
+                continue
+            for script in script_names:
+                if script in joined:
+                    emit(SRC, "-", "warn",
+                         f"Killing orphan: {script} "
+                         f"(PID: {proc.pid})")
+                    audit_log(
+                        f"Killing orphan {script} (PID: {proc.pid})")
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=3)
+                    except Exception:
+                        proc.kill()
+                    break
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+
+def cleanup_orphans():
+    try:
+        import psutil
+        layer_scripts = get_layer_scripts()
+        script_names = list(layer_scripts.values())
+        managed_pids = [p.pid for p in engines.values() if p.poll() is None]
+
+        for proc in psutil.process_iter(['pid', 'cmdline']):
+            try:
+                cmdline = proc.info['cmdline']
+                if not cmdline:
+                    continue
+                for script in script_names:
+                    if script in " ".join(cmdline):
+                        pid = proc.pid
+                        if pid not in managed_pids:
+                            emit(SRC, "-", "warn",
+                                 f"Found orphan: {script} (PID: {pid}). Terminating...")
+                            proc.terminate()
+                            try:
+                                proc.wait(timeout=3)
+                            except Exception:
+                                proc.kill()
+                            audit_log(f"Killed orphan {script} (PID: {pid})")
+                        break
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+    except ImportError:
+        pass
+
+
+# ----------------------------------------------------------------------
+# Config Loading
+# ----------------------------------------------------------------------
+def load_config() -> Tuple[Dict, Dict, Dict]:
+    try:
+        with open(SYSTEM_CONFIG_FILE, 'r') as f:
+            config = json.load(f)
+    except Exception:
+        audit_log("system_config.json not found or invalid")
+        return {}, {}, DEFAULT_LAYER_SCRIPTS
+
+    if not isinstance(config, dict):
+        audit_log("system_config.json is not a dict")
+        return {}, {}, DEFAULT_LAYER_SCRIPTS
+
+    layers = config.get("layers", {})
+    if not isinstance(layers, dict):
+        audit_log("'layers' key is not a dict")
+        layers = {}
+
+    for layer, value in layers.items():
+        if not isinstance(value, bool):
+            audit_log(f"Layer '{layer}' has invalid type (expected bool). Setting to False.")
+            layers[layer] = False
+
+    layer_scripts = config.get("layer_scripts", {})
+    if not isinstance(layer_scripts, dict):
+        layer_scripts = {}
+    final_layer_scripts = DEFAULT_LAYER_SCRIPTS.copy()
+    final_layer_scripts.update(layer_scripts)
+
+    ht_raw = config.get("layer_manager", {}).get("heartbeat_timeouts", None)
+    if isinstance(ht_raw, dict):
+        heartbeat_timeouts = dict(ht_raw)
+    else:
+        heartbeat_timeouts = dict(DEFAULT_HEARTBEAT_TIMEOUTS)
+
+    nd_raw = config.get("layer_manager", {}).get("never_disable", None)
+    if isinstance(nd_raw, list):
+        never_disable = set(nd_raw)
+    else:
+        never_disable = set(DEFAULT_NEVER_DISABLE)
+
+    layer_configs = {
+        "backoff_delays": config.get("layer_manager", {}).get(
+            "backoff_delays", DEFAULT_BACKOFF_DELAYS),
+        "max_failures_before_disable": config.get("layer_manager", {}).get(
+            "max_failures_before_disable", DEFAULT_MAX_FAILURES_BEFORE_DISABLE),
+        "heartbeat_timeout": config.get("layer_manager", {}).get(
+            "heartbeat_timeout", DEFAULT_HEARTBEAT_TIMEOUT),
+        "heartbeat_timeouts": heartbeat_timeouts,
+        "never_disable": never_disable,
+        "monitor_interval": config.get("layer_manager", {}).get(
+            "monitor_interval", DEFAULT_MONITOR_INTERVAL),
+    }
+
+    if layer_configs["max_failures_before_disable"] < 1:
+        audit_log("max_failures_before_disable must be >= 1. Setting to 1.")
+        layer_configs["max_failures_before_disable"] = 1
+
+    return layers, layer_configs, final_layer_scripts
+
+
+# ----------------------------------------------------------------------
+# Global State
+# ----------------------------------------------------------------------
+engines = {}
+layer_state = {}
+state_reason = {}
+last_heartbeat = {}
+
+persistent_state = {"failure_count": {}, "backoff_level": {}, "last_failure_time": {}}
+
+BACKOFF_DELAYS = DEFAULT_BACKOFF_DELAYS
+MAX_FAILURES_BEFORE_DISABLE = DEFAULT_MAX_FAILURES_BEFORE_DISABLE
+HEARTBEAT_TIMEOUT = DEFAULT_HEARTBEAT_TIMEOUT
+HEARTBEAT_TIMEOUTS = dict(DEFAULT_HEARTBEAT_TIMEOUTS)
+NEVER_DISABLE = set(DEFAULT_NEVER_DISABLE)
+MONITOR_INTERVAL = DEFAULT_MONITOR_INTERVAL
+LAYER_SCRIPTS = DEFAULT_LAYER_SCRIPTS
+
+# Tracks the last time a stale-heartbeat warning was emitted for a
+# unit. Used to rate-limit the warning to one per timeout window.
+_heartbeat_warned_at: Dict[str, float] = {}
+
+stop_monitor = False
+shutdown_requested = False
+sync_lock = threading.Lock()
+
+
+# ----------------------------------------------------------------------
+# Helpers
+# ----------------------------------------------------------------------
+def load_blackboard():
+    try:
+        with open(BLACKBOARD_FILE, "r") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def get_layer_scripts() -> Dict:
+    return LAYER_SCRIPTS
+
+
+def get_enabled_layers():
+    config = load_system_config()
+    layers = config.get("layers", {})
+    return [layer for layer, enabled in layers.items() if enabled]
+
+
+def load_system_config():
+    try:
+        with open(SYSTEM_CONFIG_FILE, "r") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+# ----------------------------------------------------------------------
+# State Management
+# ----------------------------------------------------------------------
+def init_layer_state(layer_id: str):
+    if layer_id not in layer_state:
+        layer_state[layer_id] = "UNDISCOVERED"
+        if layer_id not in persistent_state["failure_count"]:
+            persistent_state["failure_count"][layer_id] = 0
+            persistent_state["backoff_level"][layer_id] = 0
+            persistent_state["last_failure_time"][layer_id] = 0.0
+            save_state(persistent_state)
+        last_heartbeat[layer_id] = 0.0
+        state_reason[layer_id] = ""
+
+
+def transition_state(layer_id: str, new_state: str, reason: str = ""):
+    old_state = layer_state.get(layer_id, "UNKNOWN")
+    if old_state != new_state:
+        msg = f"{old_state} -> {new_state} (Reason: {reason if reason else 'N/A'})"
+        emit(SRC, layer_id, "info", msg)
+        audit_log(f"{layer_id}: {msg}")
+        layer_state[layer_id] = new_state
+        if reason:
+            state_reason[layer_id] = reason
+        _write_snapshot()
+
+
+def reset_failure_count(layer_id: str):
+    persistent_state["failure_count"][layer_id] = 0
+    persistent_state["backoff_level"][layer_id] = 0
+    persistent_state["last_failure_time"][layer_id] = 0.0
+    save_state(persistent_state)
+
+
+def increment_failure(layer_id: str):
+    persistent_state["failure_count"][layer_id] += 1
+    persistent_state["backoff_level"][layer_id] = min(
+        persistent_state["backoff_level"][layer_id] + 1,
+        len(BACKOFF_DELAYS) - 1
+    )
+    persistent_state["last_failure_time"][layer_id] = time.time()
+    save_state(persistent_state)
+    msg = (f"Failure #{persistent_state['failure_count'][layer_id]}. "
+           f"Backoff: {BACKOFF_DELAYS[persistent_state['backoff_level'][layer_id]]}s")
+    emit(SRC, layer_id, "warn", msg)
+    audit_log(f"{layer_id}: {msg}")
+
+
+def get_backoff_delay(layer_id: str) -> int:
+    level = persistent_state["backoff_level"].get(layer_id, 0)
+    return BACKOFF_DELAYS[level]
+
+
+# ----------------------------------------------------------------------
+# Snapshot Writer
+# ----------------------------------------------------------------------
+def _write_snapshot():
+    try:
+        snapshot = {
+            "timestamp": time.time(),
+            "layers": {}
+        }
+
+        for layer_id, script in LAYER_SCRIPTS.items():
+            state = layer_state.get(layer_id, "UNDISCOVERED")
+            pid = None
+            if layer_id in engines and engines[layer_id].poll() is None:
+                pid = engines[layer_id].pid
+
+            snapshot["layers"][layer_id] = {
+                "state": state,
+                "pid": pid,
+                "engine": script,
+                "reason": state_reason.get(layer_id, ""),
+                "failure_count": persistent_state.get("failure_count", {}).get(layer_id, 0),
+                "backoff_level": persistent_state.get("backoff_level", {}).get(layer_id, 0),
+                "last_heartbeat": last_heartbeat.get(layer_id, 0.0),
+                "unit_type": "transport" if layer_id in NEVER_DISABLE else "layer",
+            }
+
+        os.makedirs(os.path.dirname(LAYER_STATE_FILE), exist_ok=True)
+        tmp_file = LAYER_STATE_FILE + ".tmp"
+        with open(tmp_file, "w") as f:
+            json.dump(snapshot, f, indent=2)
+        os.replace(tmp_file, LAYER_STATE_FILE)
+    except Exception as e:
+        emit(SRC, "-", "error", f"Snapshot write failed: {e}")
+
+
+# ----------------------------------------------------------------------
+# Command Channel
+# ----------------------------------------------------------------------
+def _set_layer_enabled_in_config(layer_id: str, enabled: bool):
+    try:
+        config = load_system_config()
+        if "layers" not in config:
+            config["layers"] = {}
+        config["layers"][layer_id] = enabled
+        tmp_file = SYSTEM_CONFIG_FILE + ".tmp"
+        with open(tmp_file, "w") as f:
+            json.dump(config, f, indent=2)
+        os.replace(tmp_file, SYSTEM_CONFIG_FILE)
+    except Exception as e:
+        emit(SRC, layer_id, "error", f"Failed to update config: {e}")
+        audit_log(f"Failed to update config for {layer_id}: {e}")
+
+
+def _command_execute(command: str, layer: str) -> tuple:
+    if command == "status":
+        _write_snapshot()
+        return "ok", "snapshot refreshed"
+
+    if command == "restart_all":
+        enabled = get_enabled_layers()
+        count = 0
+        for lid in enabled:
+            if lid in engines and engines[lid].poll() is None:
+                stop_engine(lid)
+            start_engine(lid)
+            count += 1
+        return "ok", f"restarted {count} layers"
+
+    if command in ("enable", "disable", "restart"):
+        if not layer:
+            return "error", "no layer specified"
+        if layer not in LAYER_SCRIPTS:
+            return "error", f"unknown layer: {layer}"
+
+        if command == "enable":
+            _set_layer_enabled_in_config(layer, True)
+            if layer in engines and engines[layer].poll() is None:
+                return "ok", f"{layer} already running"
+            if layer_state.get(layer) == "DISABLED":
+                transition_state(layer, "STOPPED", "Enable command")
+            start_engine(layer)
+            return "ok", f"{layer} enabled"
+
+        if command == "disable":
+            _set_layer_enabled_in_config(layer, False)
+            if layer in engines and engines[layer].poll() is None:
+                stop_engine(layer)
+            transition_state(layer, "DISABLED", "Disable command")
+            return "ok", f"{layer} disabled"
+
+        if command == "restart":
+            enabled = get_enabled_layers()
+            if layer not in enabled:
+                return "error", f"{layer} is disabled; enable it first"
+            if layer in engines and engines[layer].poll() is None:
+                stop_engine(layer)
+            start_engine(layer)
+            return "ok", f"{layer} restarted"
+
+    return "error", f"unknown command: {command}"
+
+
+def _process_command():
+    if not os.path.exists(LAYER_COMMAND_FILE):
+        return
+
+    try:
+        with open(LAYER_COMMAND_FILE, 'r') as f:
+            cmd = json.load(f)
+    except Exception as e:
+        emit(SRC, "-", "warn", f"Command file read failed: {e}")
+        try:
+            os.remove(LAYER_COMMAND_FILE)
+        except Exception:
+            pass
+        return
+
+    cmd_id = cmd.get("id", "")
+    command = cmd.get("command", "")
+    layer = cmd.get("layer", "")
+    target_layer = layer if layer else "-"
+
+    emit(SRC, target_layer, "info",
+         f"Command received: {command} {layer} (id={cmd_id})")
+    audit_log(f"Command received: {command} {layer} (id={cmd_id})")
+
+    with sync_lock:
+        status, message = _command_execute(command, layer)
+
+    result = {
+        "id": cmd_id,
+        "status": status,
+        "message": message,
+        "timestamp": time.time()
+    }
+
+    try:
+        tmp_file = LAYER_RESULT_FILE + ".tmp"
+        with open(tmp_file, 'w') as f:
+            json.dump(result, f, indent=2)
+        os.replace(tmp_file, LAYER_RESULT_FILE)
+        level = "info" if status == "ok" else "error"
+        emit(SRC, target_layer, level, f"Command result: {status} - {message}")
+        audit_log(f"Command result: {status} - {message}")
+    except Exception as e:
+        emit(SRC, target_layer, "error", f"Result write failed: {e}")
+
+    try:
+        os.remove(LAYER_COMMAND_FILE)
+    except Exception:
+        pass
+
+
+# ----------------------------------------------------------------------
+# Pre-flight Checks
+# ----------------------------------------------------------------------
+def pre_flight_check(layer_id: str) -> Tuple[bool, str]:
+    scripts = get_layer_scripts()
+    script = scripts.get(layer_id)
+    if not script:
+        return False, f"Script mapping not found for layer '{layer_id}'"
+
+    if not os.path.exists(script):
+        return False, f"Script '{script}' not found"
+
+    if not shutil.which("python3") and not shutil.which("python"):
+        return False, "'python' / 'python3' not found in PATH"
+
+    if not os.path.exists(SYSTEM_CONFIG_FILE):
+        return False, f"'{SYSTEM_CONFIG_FILE}' not found"
+
+    try:
+        with open(SYSTEM_CONFIG_FILE, "r") as f:
+            json.load(f)
+    except Exception:
+        return False, f"'{SYSTEM_CONFIG_FILE}' is not valid JSON"
+
+    blackboard_dir = os.path.dirname(BLACKBOARD_FILE)
+    if blackboard_dir and not os.path.exists(blackboard_dir):
+        try:
+            os.makedirs(blackboard_dir, exist_ok=True)
+        except Exception:
+            return False, f"Blackboard directory '{blackboard_dir}' cannot be created"
+
+    if blackboard_dir and not os.access(blackboard_dir, os.W_OK):
+        return False, f"Blackboard directory '{blackboard_dir}' is not writable"
+
+    return True, "OK"
+
+
+# ----------------------------------------------------------------------
+# Heartbeat Check (per-unit timeout)
+#
+# The check consults process liveness first. A stale heartbeat on a
+# live process is a degraded condition, not a failure. The
+# supervisor only transitions a RUNNING unit out of RUNNING when the
+# process itself has exited. This is the documented supervision
+# contract: liveness, not progress, drives the state transition.
+# ----------------------------------------------------------------------
+def check_heartbeat(layer_id: str) -> bool:
+    """
+    Return True when the unit should stay in RUNNING.
+
+    False only when the process has exited. A live process with a
+    stale heartbeat returns True and emits one warning per timeout
+    window.
+    """
+    try:
+        proc = engines.get(layer_id)
+        if proc is not None and proc.poll() is not None:
+            return False
+
+        timeout = HEARTBEAT_TIMEOUTS.get(
+            layer_id,
+            HEARTBEAT_TIMEOUTS.get("default", HEARTBEAT_TIMEOUT)
+        )
+        heartbeat_file = os.path.join(get_temp_dir(), f"acf_{layer_id}.heartbeat")
+        if not os.path.exists(heartbeat_file):
+            # No heartbeat written yet. Process is alive. Give it time.
+            return True
+
+        mtime = os.path.getmtime(heartbeat_file)
+        if time.time() - mtime > timeout:
+            now = time.time()
+            last_warn = _heartbeat_warned_at.get(layer_id, 0.0)
+            if now - last_warn > timeout:
+                _heartbeat_warned_at[layer_id] = now
+                pid = proc.pid if proc is not None else "?"
+                emit(SRC, layer_id, "warn",
+                     f"heartbeat stale for {int(now - mtime)}s "
+                     f"but process is alive (pid {pid})")
+            return True
+        return True
+    except PermissionError as e:
+        emit(SRC, layer_id, "warn", f"Permission denied reading heartbeat: {e}")
+        audit_log(f"Permission denied reading heartbeat for {layer_id}")
+        return False
+    except Exception as e:
+        emit(SRC, layer_id, "warn", f"Unknown heartbeat error: {e}")
+        audit_log(f"Unknown heartbeat error for {layer_id}: {e}")
+        return True
+
+
+# ----------------------------------------------------------------------
+# Engine Management
+# ----------------------------------------------------------------------
+def _terminate_process(layer_id: str) -> None:
+    """
+    Terminate the process for layer_id and remove it from engines.
+    Does not touch state or failure count. The caller decides what
+    the unit's next state should be.
+    """
+    if layer_id not in engines:
+        return
+    proc = engines[layer_id]
+    if proc.poll() is None:
+        emit(SRC, layer_id, "info", f"Stopping (PID: {proc.pid})...")
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            emit(SRC, layer_id, "warn", "Did not respond. Killing...")
+            proc.kill()
+            try:
+                proc.wait(timeout=2)
+            except Exception:
+                pass
+        emit(SRC, layer_id, "info", "Stopped.")
+    if layer_id in engines:
+        del engines[layer_id]
+
+
+def start_engine(layer_id: str):
+    init_layer_state(layer_id)
+
+    if layer_state.get(layer_id) == "DISABLED":
+        emit(SRC, layer_id, "info", "State is DISABLED. Not starting.")
+        return
+
+    for lid, p in list(engines.items()):
+        if p.poll() is not None:
+            del engines[lid]
+            if layer_state.get(lid) == "RUNNING":
+                transition_state(lid, "STOPPED", "Process terminated")
+
+    if layer_id in engines and engines[layer_id].poll() is None:
+        return
+
+    ok, reason = pre_flight_check(layer_id)
+    if not ok:
+        transition_state(layer_id, "FAILED", f"Pre-flight: {reason}")
+        increment_failure(layer_id)
+        return
+
+    scripts = get_layer_scripts()
+    script = scripts.get(layer_id)
+    emit(SRC, layer_id, "info", f"Starting ({script})...")
+    try:
+        python_cmd = "python" if os.name == "nt" else "python3"
+        proc = subprocess.Popen([python_cmd, script])
+        process_tree.assign_process(proc)
+        engines[layer_id] = proc
+        transition_state(layer_id, "RUNNING", f"Started (PID: {proc.pid})")
+        reset_failure_count(layer_id)
+    except Exception as e:
+        transition_state(layer_id, "FAILED", f"Popen error: {e}")
+        increment_failure(layer_id)
+
+
+def stop_engine(layer_id: str):
+    init_layer_state(layer_id)
+    if layer_id not in engines:
+        return
+    _terminate_process(layer_id)
+    transition_state(layer_id, "STOPPED", "Stopped by user")
+    reset_failure_count(layer_id)
+
+
+def stop_all_engines():
+    for lid in list(engines.keys()):
+        stop_engine(lid)
+
+
+# ----------------------------------------------------------------------
+# Main Loop (Sync Layers)
+# ----------------------------------------------------------------------
+def sync_layers():
+    with sync_lock:
+        if shutdown_requested:
+            return
+
+        # Heartbeat / liveness check. A unit leaves RUNNING only when
+        # its process has exited. The process is terminated first,
+        # then the failure is recorded, then the reference is dropped.
+        # The next cycle sees state FAILED and may start a replacement.
+        for layer in list(engines.keys()):
+            if layer_state.get(layer) == "RUNNING":
+                if not check_heartbeat(layer):
+                    emit(SRC, layer, "warn",
+                         "Process not alive. Terminating and marking FAILED.")
+                    _terminate_process(layer)
+                    transition_state(layer, "FAILED", "Process exited")
+                    increment_failure(layer)
+
+        enabled = get_enabled_layers()
+
+        for layer in LAYER_SCRIPTS.keys():
+            init_layer_state(layer)
+
+        for layer in list(LAYER_SCRIPTS.keys()):
+            if layer not in enabled and layer_state.get(layer) != "DISABLED":
+                if layer in engines and engines[layer].poll() is None:
+                    stop_engine(layer)
+                transition_state(layer, "DISABLED", "Layer not enabled")
+
+        for layer in list(LAYER_SCRIPTS.keys()):
+            if layer_state.get(layer) == "DISABLED" and layer in enabled:
+                emit(SRC, layer, "info", "Re-enabling (config now enabled).")
+                transition_state(layer, "STOPPED", "Re-enabled by config change")
+                reset_failure_count(layer)
+
+        for layer in enabled:
+            current_state = layer_state.get(layer, "UNDISCOVERED")
+
+            if current_state == "RUNNING":
+                if layer in engines and engines[layer].poll() is None:
+                    continue
+                else:
+                    returncode = engines[layer].poll() if layer in engines else None
+                    if returncode == 0:
+                        transition_state(layer, "STOPPED", f"Clean exit (code {returncode})")
+                        reset_failure_count(layer)
+                    else:
+                        transition_state(layer, "FAILED", f"Unexpected exit (code {returncode})")
+                        increment_failure(layer)
+                    if layer in engines:
+                        del engines[layer]
+
+            if current_state in ("STOPPED", "UNDISCOVERED"):
+                start_engine(layer)
+                continue
+
+            if current_state == "FAILED":
+                # ── Units in NEVER_DISABLE retry forever on the backoff
+                #    schedule. They are never auto-disabled.
+                if layer in NEVER_DISABLE:
+                    delay = get_backoff_delay(layer)
+                    elapsed = time.time() - persistent_state["last_failure_time"].get(layer, 0)
+                    level = (
+                        "critical"
+                        if persistent_state["backoff_level"].get(layer, 0) >= len(BACKOFF_DELAYS) - 1
+                        else "warn"
+                    )
+                    if elapsed >= delay:
+                        emit(SRC, layer, "info", f"Backoff elapsed ({delay}s). Retrying...")
+                        transition_state(layer, "STOPPED", "Backoff elapsed, retrying")
+                        start_engine(layer)
+                    else:
+                        emit(SRC, layer, level,
+                             f"{layer} failed; retry in {int(delay - elapsed)}s "
+                             f"(failure #{persistent_state['failure_count'].get(layer, 0)})")
+                    continue
+
+                # ── Normal layers: auto-disable after N consecutive failures.
+                if persistent_state["failure_count"].get(layer, 0) >= MAX_FAILURES_BEFORE_DISABLE:
+                    emit(SRC, layer, "warn",
+                         f"Auto-disabling after {MAX_FAILURES_BEFORE_DISABLE} failures.")
+                    transition_state(layer, "DISABLED",
+                                     f"Auto-disabled ({MAX_FAILURES_BEFORE_DISABLE} failures)")
+                    audit_log(f"{layer}: Auto-disabled after {MAX_FAILURES_BEFORE_DISABLE} failures")
+                    continue
+
+                delay = get_backoff_delay(layer)
+                elapsed = time.time() - persistent_state["last_failure_time"].get(layer, 0)
+                if elapsed >= delay:
+                    emit(SRC, layer, "info", f"Backoff elapsed ({delay}s). Retrying...")
+                    transition_state(layer, "STOPPED", "Backoff elapsed, retrying")
+                    start_engine(layer)
+
+
+# ----------------------------------------------------------------------
+# Monitor Thread
+# ----------------------------------------------------------------------
+def monitor_loop():
+    last_enabled = None
+    orphan_cleanup_counter = 0
+    while not stop_monitor and not shutdown_requested:
+        try:
+            sync_layers()
+
+            orphan_cleanup_counter += 1
+            if orphan_cleanup_counter >= 10:
+                cleanup_orphans()
+                orphan_cleanup_counter = 0
+
+            enabled = get_enabled_layers()
+            if enabled != last_enabled:
+                emit(SRC, "-", "info", f"Enabled layers changed: {enabled}")
+                last_enabled = enabled
+
+            _process_command()
+            _write_snapshot()
+
+        except Exception as e:
+            emit(SRC, "-", "error", f"Monitor error: {e}")
+            audit_log(f"Monitor error: {e}")
+        time.sleep(MONITOR_INTERVAL)
+
+
+# ----------------------------------------------------------------------
+# Initialize
+# ----------------------------------------------------------------------
+def initialize():
+    global stop_monitor, shutdown_requested
+    global BACKOFF_DELAYS, MAX_FAILURES_BEFORE_DISABLE
+    global HEARTBEAT_TIMEOUT, MONITOR_INTERVAL, LAYER_SCRIPTS, persistent_state
+    global HEARTBEAT_TIMEOUTS, NEVER_DISABLE
+
+    emit(SRC, "-", "info", "Layer Manager starting")
+
+    if not acquire_pid_file():
+        emit(SRC, "-", "error", "Another instance is already running. Exiting.")
+        sys.exit(1)
+
+    layers, layer_configs, loaded_layer_scripts = load_config()
+    LAYER_SCRIPTS = loaded_layer_scripts
+    BACKOFF_DELAYS = layer_configs.get("backoff_delays", DEFAULT_BACKOFF_DELAYS)
+    MAX_FAILURES_BEFORE_DISABLE = layer_configs.get(
+        "max_failures_before_disable", DEFAULT_MAX_FAILURES_BEFORE_DISABLE)
+    HEARTBEAT_TIMEOUT = layer_configs.get("heartbeat_timeout", DEFAULT_HEARTBEAT_TIMEOUT)
+    HEARTBEAT_TIMEOUTS = layer_configs.get("heartbeat_timeouts", dict(DEFAULT_HEARTBEAT_TIMEOUTS))
+    NEVER_DISABLE = set(layer_configs.get("never_disable", DEFAULT_NEVER_DISABLE))
+    MONITOR_INTERVAL = layer_configs.get("monitor_interval", DEFAULT_MONITOR_INTERVAL)
+
+    audit_log("Layer manager started")
+
+    persistent_state = load_state()
+
+    # Signal handlers are installed by the orchestrator's main thread.
+    # layer_manager runs as a daemon thread inside the orchestrator
+    # and cannot install handlers itself (signal.signal raises
+    # ValueError from a non-main thread). The orchestrator's
+    # _shutdown_signal calls handle_shutdown() and
+    # stop_all_engines() directly.
+    atexit.register(stop_all_engines)
+    atexit.register(release_pid_file)
+
+    kill_orphans()
+
+    emit(SRC, "-", "info", "Starting monitor thread...")
+    monitor_thread = threading.Thread(target=monitor_loop, daemon=True)
+    monitor_thread.start()
+
+    time.sleep(1)
+    sync_layers()
+
+    while not shutdown_requested:
+        time.sleep(1)
+
+    emit(SRC, "-", "info", "Shutting down...")
+    stop_monitor = True
+    monitor_thread.join(timeout=2)
+    stop_all_engines()
+    release_pid_file()
+    emit(SRC, "-", "info", "Layer Manager terminated.")
+    audit_log("Layer manager terminated")
+
+
+def handle_shutdown():
+    global shutdown_requested
+    emit(SRC, "-", "warn", "Shutdown signal received. Cleaning up...")
+    audit_log("Shutdown signal received")
+    shutdown_requested = True
+
+
+# ----------------------------------------------------------------------
+# Entry Point
+# ----------------------------------------------------------------------
+if __name__ == "__main__":
+    initialize()

@@ -1,0 +1,126 @@
+{
+  "version": "1.0",
+  "enabled_capabilities": {
+    "ssh": true,
+    "sensor": true,
+    "custom": {
+      "defender": true,
+      "pfirewall": true,
+      "synthetic_firewall": true
+    }
+  },
+  "capability_paths": {
+    "sensor": "psutil",
+    "custom": {
+      "defender": "C:\\WINDOWS\\System32\\Winevt\\Logs\\Microsoft-Windows-Windows Defender%4Operational.evtx",
+      "pfirewall": "C:\\Windows\\System32\\LogFiles\\Firewall\\pfirewall.log",
+      "synthetic": "C:\\Users\\user\\Desktop\\acf_shared\\acf_platform\\synthetic.log",
+      "synthetic_firewall": "C:\\Users\\user\\Desktop\\acf_shared\\acf_platform\\synthetic_firewall.log"
+    }
+  },
+  "capability_sources": {
+    "defender": {
+      "type": "eventlog",
+      "event_ids": [
+        1006,
+        1007,
+        1008,
+        1116,
+        1117,
+        5001,
+        5007
+      ]
+    },
+    "pfirewall": {
+      "type": "file"
+    },
+    "synthetic": {
+      "type": "file"
+    },
+    "synthetic_firewall": {
+      "type": "file"
+    }
+  },
+  "capability_layers": {
+    "synthetic_firewall": [
+      "layer1",
+      "layer2",
+      "layer3",
+      "layer4a",
+      "layer4c"
+    ]
+  },
+  "layers": {
+    "layer1": true,
+    "layer2": true,
+    "layer3": true,
+    "layer4a": true,
+    "layer4c": true,
+    "layer5": false,
+    "reader": true
+  },
+  "risk_thresholds": {
+    "GREEN_TO_YELLOW": 65,
+    "YELLOW_TO_ORANGE": 80,
+    "ORANGE_TO_RED": 90,
+    "RED_TO_ORANGE": 80,
+    "ORANGE_TO_YELLOW": 60,
+    "YELLOW_TO_GREEN": 40
+  },
+  "sensor_intervals": {
+    "GREEN": 30,
+    "YELLOW": 15,
+    "ORANGE": 5,
+    "RED": 2
+  },
+  "app_intervals": {
+    "GREEN": 30,
+    "YELLOW": 15,
+    "ORANGE": 5,
+    "RED": 3
+  },
+  "capability_rules": {
+    "sensor": {
+      "watch_paths": [
+        "C:\\Windows\\System32\\drivers\\etc",
+        "C:\\ProgramData\\ssh"
+      ],
+      "thresholds": {
+        "cpu_spike": 70,
+        "cpu_multiplier": 1.5,
+        "memory_spike": 80,
+        "memory_multiplier": 1.5
+      }
+    },
+    "pfirewall": {
+      "type": "file",
+      "rules": [
+        {
+          "regex": "DROP|BLOCK|Deny"
+        }
+      ],
+      "decoder": "<decoder><regex>^\\s*(\\d{4}-\\d{2}-\\d{2})\\s+(\\d{2}:\\d{2}:\\d{2})\\s+(\\S+)\\s+(\\S+)\\s+(\\S+)\\s+(\\S+)\\s+(\\d+|-)\\s+(\\d+|-)\\s+(\\d+|-)\\s+(\\S+)\\s+(\\S+)\\s+(\\S+)\\s+(\\S+)\\s+(\\S+)\\s+(\\S+)\\s+(\\S+)\\s+(\\S+)\\s*$</regex><order>date,time,action,protocol,src_ip,dst_ip,src_port,dst_port,size,tcpflags,tcpsyn,tcpack,tcpwin,icmptype,icmpcode,info,path</order></decoder>"
+    },
+    "ssh": {
+      "type": "eventlog",
+      "log_name": "Security",
+      "rules": [
+        {
+          "event_id": 4625
+        }
+      ]
+    },
+    "defender": {
+      "type": "eventlog",
+      "log_name": "Microsoft-Windows-Windows Defender/Operational",
+      "rules": [
+        {
+          "event_id": 1116
+        },
+        {
+          "event_id": 1117
+        }
+      ]
+    }
+  }
+}

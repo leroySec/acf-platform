@@ -1,0 +1,374 @@
+#!/usr/bin/env python3
+"""
+ais/grouper.py — Group detection records into analytical populations.
+
+Reads detection records from layer_1_monitor_<cap>. Returns group
+structures keyed by actor (source, user, target).
+
+Stateless. Every call processes the detections passed in. State
+(baselines, threat memory) stays in the AIS.
+
+Grouping dimensions produced:
+  source_groups       — one per actor that produced events
+  user_groups         — one per user (when the source provides a user)
+  source_user_groups  — one per (source, user) pair
+  target_groups       — one per destination (for direction-aware sources)
+  cross_source_by_user — users seen from multiple sources
+
+Direction-aware:
+  For events carrying path == "SEND":
+    source = src_ip (local host)
+    target = dst_ip + dst_port
+  For events carrying path == "RECEIVE":
+    source = src_ip (remote host)
+    target = dst_ip (local host)
+  Otherwise:
+    source = first ip from ips field, or "-"
+    target = absent
+
+Missing fields are absent from groups. Placeholder values ("-",
+"0.0.0.0", "") are treated as missing.
+"""
+
+import time
+from typing import Any, Dict, List, Optional
+
+
+SCHEMA_VERSION = "1.0"
+
+# Placeholder values treated as missing.
+_PLACEHOLDERS = frozenset({"-", "", "0.0.0.0", "::", "N/A"})
+
+
+def _clean(value: Any) -> Optional[str]:
+    """Return None for placeholder values, the string otherwise."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        try:
+            value = str(value)
+        except Exception:
+            return None
+    value = value.strip()
+    if value in _PLACEHOLDERS:
+        return None
+    return value
+
+
+def _extract_source(event: Dict) -> Optional[str]:
+    """Return the actor IP for the event, or None."""
+    path = _clean(event.get("path"))
+    if path == "SEND":
+        # Firewall SEND: src_ip is the local host
+        return _clean(event.get("src_ip"))
+    if path == "RECEIVE":
+        # Firewall RECEIVE: src_ip is the remote host
+        return _clean(event.get("src_ip"))
+    # Eventlog and other shapes: first ip from ips list
+    ips = event.get("ips")
+    if isinstance(ips, list):
+        for ip in ips:
+            c = _clean(ip)
+            if c:
+                return c
+    # Fallback: src_ip field if present
+    return _clean(event.get("src_ip"))
+
+
+def _extract_target(event: Dict) -> Optional[str]:
+    """Return the target for the event, or None."""
+    path = _clean(event.get("path"))
+    if path == "SEND":
+        # Firewall SEND: target is the remote host
+        dst = _clean(event.get("dst_ip"))
+        port = _clean(event.get("dst_port"))
+        if dst and port:
+            return f"{dst}:{port}"
+        return dst
+    if path == "RECEIVE":
+        # Firewall RECEIVE: target is the local host
+        return _clean(event.get("dst_ip"))
+    return None
+
+
+def _extract_user(event: Dict) -> Optional[str]:
+    """Return the user identity for the event, or None."""
+    return _clean(event.get("user"))
+
+
+def _extract_class(event: Dict) -> str:
+    """The class of the event, used for counting."""
+    c = _clean(event.get("class"))
+    if c:
+        return c
+    a = _clean(event.get("action"))
+    if a:
+        return a
+    eid = event.get("event_id")
+    if eid is not None:
+        return f"event:{eid}"
+    return "unknown"
+
+
+def _extract_ts(event: Dict) -> Optional[float]:
+    """Event time as a float epoch, if derivable."""
+    ts = event.get("ts")
+    if isinstance(ts, (int, float)):
+        return float(ts)
+    return None
+
+
+def _bump(counter: Dict[str, int], key: str) -> None:
+    counter[key] = counter.get(key, 0) + 1
+
+
+def _finalize_group(actor: str, actor_kind: str, direction: Optional[str],
+                     events: List[Dict], classes: Dict[str, int],
+                     targets: set, ports: set, users: set,
+                     sources: set,
+                     first_seen: Optional[float],
+                     last_seen: Optional[float]) -> Dict:
+    window = None
+    if first_seen is not None and last_seen is not None:
+        window = round(last_seen - first_seen, 3)
+    group = {
+        "actor": actor,
+        "actor_kind": actor_kind,
+        "events_total": len(events),
+        "classes": dict(classes),
+        "first_seen": first_seen,
+        "last_seen": last_seen,
+        "window_seconds": window,
+    }
+    if direction:
+        group["direction"] = direction
+    if targets:
+        group["distinct_destinations"] = len(targets)
+        group["destinations"] = sorted(targets)[:20]
+    if ports:
+        group["distinct_dst_ports"] = sorted(ports)
+    if users:
+        group["distinct_users"] = len(users)
+        group["users"] = sorted(users)[:20]
+    if sources:
+        group["distinct_sources"] = len(sources)
+        group["sources"] = sorted(sources)[:20]
+    return group
+
+
+def group_detections(capability: str,
+                     detections: List[Dict],
+                     now: Optional[float] = None) -> Dict:
+    """
+    Group detections into analytical populations.
+
+    Parameters
+    ----------
+    capability : str
+    detections : list of dicts, each a detection record
+    now : float, current time (defaults to time.time())
+
+    Returns
+    -------
+    dict with keys:
+        capability, generated_at, input_count,
+        source_groups, user_groups, source_user_groups,
+        target_groups, cross_source_by_user,
+        version
+    """
+    if now is None:
+        now = time.time()
+
+    if not isinstance(detections, list):
+        detections = []
+
+    # --- per-actor accumulators ---
+    by_source: Dict[str, Dict] = {}
+    by_user: Dict[str, Dict] = {}
+    by_source_user: Dict[str, Dict] = {}
+    by_target: Dict[str, Dict] = {}
+
+    # Track sources per user for cross-source correlation.
+    user_to_sources: Dict[str, set] = {}
+
+    for event in detections:
+        if not isinstance(event, dict):
+            continue
+
+        source = _extract_source(event)
+        target = _extract_target(event)
+        user = _extract_user(event)
+        cls = _extract_class(event)
+        ts = _extract_ts(event)
+        direction = _clean(event.get("path"))
+
+        # --- source group ---
+        if source:
+            bucket = by_source.setdefault(source, {
+                "events": [],
+                "classes": {},
+                "targets": set(),
+                "ports": set(),
+                "users": set(),
+                "first": None,
+                "last": None,
+                "direction": direction,
+            })
+            bucket["events"].append(event)
+            _bump(bucket["classes"], cls)
+            if target:
+                bucket["targets"].add(target)
+            p = _clean(event.get("dst_port"))
+            if p:
+                bucket["ports"].add(p)
+            if user:
+                bucket["users"].add(user)
+            if ts is not None:
+                if bucket["first"] is None or ts < bucket["first"]:
+                    bucket["first"] = ts
+                if bucket["last"] is None or ts > bucket["last"]:
+                    bucket["last"] = ts
+
+        # --- user group ---
+        if user:
+            bucket = by_user.setdefault(user, {
+                "events": [],
+                "classes": {},
+                "sources": set(),
+                "first": None,
+                "last": None,
+            })
+            bucket["events"].append(event)
+            _bump(bucket["classes"], cls)
+            if source:
+                bucket["sources"].add(source)
+                user_to_sources.setdefault(user, set()).add(source)
+            if ts is not None:
+                if bucket["first"] is None or ts < bucket["first"]:
+                    bucket["first"] = ts
+                if bucket["last"] is None or ts > bucket["last"]:
+                    bucket["last"] = ts
+
+        # --- source+user group ---
+        if source and user:
+            key = f"{source}::{user}"
+            bucket = by_source_user.setdefault(key, {
+                "events": [],
+                "classes": {},
+                "first": None,
+                "last": None,
+            })
+            bucket["events"].append(event)
+            _bump(bucket["classes"], cls)
+            if ts is not None:
+                if bucket["first"] is None or ts < bucket["first"]:
+                    bucket["first"] = ts
+                if bucket["last"] is None or ts > bucket["last"]:
+                    bucket["last"] = ts
+
+        # --- target group ---
+        if target:
+            bucket = by_target.setdefault(target, {
+                "events": [],
+                "classes": {},
+                "first": None,
+                "last": None,
+            })
+            bucket["events"].append(event)
+            _bump(bucket["classes"], cls)
+            if ts is not None:
+                if bucket["first"] is None or ts < bucket["first"]:
+                    bucket["first"] = ts
+                if bucket["last"] is None or ts > bucket["last"]:
+                    bucket["last"] = ts
+
+    # --- finalize ---
+    source_groups = [
+        _finalize_group(
+            actor=src,
+            actor_kind="ip",
+            direction=b["direction"],
+            events=b["events"],
+            classes=b["classes"],
+            targets=b["targets"],
+            ports=b["ports"],
+            users=b["users"],
+            sources=set(),
+            first_seen=b["first"],
+            last_seen=b["last"],
+        )
+        for src, b in by_source.items()
+    ]
+
+    user_groups = [
+        _finalize_group(
+            actor=usr,
+            actor_kind="user",
+            direction=None,
+            events=b["events"],
+            classes=b["classes"],
+            targets=set(),
+            ports=set(),
+            users=set(),
+            sources=b["sources"],
+            first_seen=b["first"],
+            last_seen=b["last"],
+        )
+        for usr, b in by_user.items()
+    ]
+
+    source_user_groups = [
+        _finalize_group(
+            actor=key,
+            actor_kind="source_user",
+            direction=None,
+            events=b["events"],
+            classes=b["classes"],
+            targets=set(),
+            ports=set(),
+            users=set(),
+            sources=set(),
+            first_seen=b["first"],
+            last_seen=b["last"],
+        )
+        for key, b in by_source_user.items()
+    ]
+
+    target_groups = [
+        _finalize_group(
+            actor=tgt,
+            actor_kind="ip",
+            direction=None,
+            events=b["events"],
+            classes=b["classes"],
+            targets=set(),
+            ports=set(),
+            users=set(),
+            sources=set(),
+            first_seen=b["first"],
+            last_seen=b["last"],
+        )
+        for tgt, b in by_target.items()
+    ]
+
+    # --- cross-source correlation by user ---
+    cross_source_by_user = []
+    for usr, sources in user_to_sources.items():
+        if len(sources) > 1:
+            cross_source_by_user.append({
+                "user": usr,
+                "sources": sorted(sources),
+                "source_count": len(sources),
+            })
+
+    return {
+        "capability": capability,
+        "generated_at": now,
+        "input_count": len(detections),
+        "source_groups": source_groups,
+        "user_groups": user_groups,
+        "source_user_groups": source_user_groups,
+        "target_groups": target_groups,
+        "cross_source_by_user": cross_source_by_user,
+        "version": SCHEMA_VERSION,
+    }

@@ -1,0 +1,26 @@
+﻿**********************
+Début de la transcription Windows PowerShell
+Heure de début : 20261022165143
+Nom d'utilisateur : DESKTOP-9LTHBF9\user
+Utilisateur runAs :  DESKTOP-9LTHBF9\user
+Nom de la configuration : 
+Ordinateur : DESKTOP-9LTHBF9 (Microsoft Windows NT 10.0.19045.0)
+Application hôte : C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+ID de processus : 13904
+PSVersion: 5.1.19041.6456
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.19041.6456
+BuildVersion: 10.0.19041.6456
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+Transcription démarrée, le fichier de sortie est C:\Users\user\Desktop\acf_shared\acf_platform\evidence\gate1_rerun_transcript.txt
+2026-10-22T16:51:43.0316016+01:00
+PS C:\Users\user\Desktop\acf_shared\acf_platform> Stop-Transcript
+Get-Item "C:\Users\user\Desktop\acf_shared\acf_platform\evidence\gate1_rerun_transcript.txt" | Select-Object Name, Length
+**********************
+Fin de la transcription Windows PowerShell
+Heure de fin : 20261022165242
+**********************

@@ -1,0 +1,988 @@
+﻿**********************
+Début de la transcription Windows PowerShell
+Heure de début : 20261022161327
+Nom d'utilisateur : DESKTOP-9LTHBF9\user
+Utilisateur runAs :  DESKTOP-9LTHBF9\user
+Nom de la configuration : 
+Ordinateur : DESKTOP-9LTHBF9 (Microsoft Windows NT 10.0.19045.0)
+Application hôte : C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+ID de processus : 14944
+PSVersion: 5.1.19041.6456
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.19041.6456
+BuildVersion: 10.0.19041.6456
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+Transcription démarrée, le fichier de sortie est C:\Users\user\Desktop\acf_shared\acf_platform\evidence\gate1_20261022_161327.txt
+2026-10-22T16:13:27.5032833+01:00
+PS C:\Users\user\Desktop\acf_shared\acf_platform> cls
+PS C:\Users\user\Desktop\acf_shared\acf_platform> 
+netsh advfirewall firewall show rule name=all | Select-String "Acf_capability_ssh_BLOCK"
+PS C:\Users\user\Desktop\acf_shared\acf_platform> 
+netsh advfirewall firewall show rule name=all | Select-String "Acf_capability_ssh_BLOCK"
+PS C:\Users\user\Desktop\acf_shared\acf_platform> $bb = Get-Content $env:TEMP\acf_state.json -Raw | ConvertFrom-Json
+"state:              $($bb.layer_3_state_ssh.state)"
+"blocked_count:      $($bb.layer_4a_response_ssh.blocked_ips.Count)"
+"last_action:        $($bb.layer_4a_response_ssh.actions[-1].action)"
+"last_action_ts:     $($bb.layer_4a_response_ssh.actions[-1].ts)"
+"last_action_method: $($bb.layer_4a_response_ssh.actions[-1].method)"
+"now:                $(Get-Date -Format o)"
+state:              GREEN
+blocked_count:      0
+last_action:        release_ip
+last_action_ts:     1792682741.95512
+last_action_method: netsh
+now:                2026-10-22T16:25:45.7516950+01:00
+PS C:\Users\user\Desktop\acf_shared\acf_platform> Get-NetFirewallRule -DisplayName "ACF_capability_ssh_BLOCK*" -ErrorAction SilentlyContinue | Select-Object DisplayName, Direction, Action, Enabled, Profile
+PS C:\Users\user\Desktop\acf_shared\acf_platform> cls
+PS C:\Users\user\Desktop\acf_shared\acf_platform> Get-NetFirewallRule -DisplayName "ACF_capability_ssh_BLOCK*" -ErrorAction SilentlyContinue | Select-Object DisplayName, Direction, Action, Enabled, Profile
+PS C:\Users\user\Desktop\acf_shared\acf_platform> $bb = Get-Content $env:TEMP\acf_state.json -Raw | ConvertFrom-Json
+"state:              $($bb.layer_3_state_ssh.state)"
+"blocked_count:      $($bb.layer_4a_response_ssh.blocked_ips.Count)"
+"last_action:        $($bb.layer_4a_response_ssh.actions[-1].action)"
+"last_action_ts:     $($bb.layer_4a_response_ssh.actions[-1].ts)"
+"last_action_method: $($bb.layer_4a_response_ssh.actions[-1].method)"
+"now:                $(Get-Date -Format o)"
+state:              GREEN
+blocked_count:      0
+last_action:        release_ip
+last_action_ts:     1792682784.4982862
+last_action_method: netsh
+now:                2026-10-22T16:26:28.0483969+01:00
+PS C:\Users\user\Desktop\acf_shared\acf_platform> cls
+PS C:\Users\user\Desktop\acf_shared\acf_platform> $bb = Get-Content $env:TEMP\acf_state.json -Raw | ConvertFrom-Json
+"=== PRE-KILL ==="
+"state:            $($bb.layer_3_state_ssh.state)"
+"input_source:     $($bb.layer_3_state_ssh.detail.input_source)"
+"state_timestamp:  $($bb.layer_3_state_ssh.state_timestamp)"
+"ais_timestamp:    $($bb.layer_2_ais_ssh.ais_timestamp)"
+"ais_healthy:      $($bb.layer_2_ais_ssh.ais_healthy)"
+"now:              $(Get-Date -Format o)"
+""
+"=== PYTHON PROCESSES ==="
+Get-Process python* -ErrorAction SilentlyContinue | Select-Object Id, StartTime, @{n='CmdLine';e={(Get-CimInstance Win32_Process -Filter "ProcessId=$($_.Id)").CommandLine}} | Format-List
+=== PRE-KILL ===
+state:            GREEN
+input_source:     none
+state_timestamp:  1792685092.435316
+ais_timestamp:    1792685092.9146059
+ais_healthy:      False
+now:              2026-10-22T17:04:59.9325975+01:00
+
+=== PYTHON PROCESSES ===
+
+
+Id        : 1220
+StartTime : 2026-10-22 3:44:28 PM
+CmdLine   : C:\Users\user\AppData\Local\Programs\Python\Python310\python.exe ais/ais_engine.py sensor
+
+Id        : 6304
+StartTime : 2026-10-22 3:44:28 PM
+CmdLine   : C:\Users\user\AppData\Local\Programs\Python\Python310\python.exe response/response_engine.py sensor
+
+Id        : 6932
+StartTime : 2026-10-22 3:44:28 PM
+CmdLine   : C:\Users\user\AppData\Local\Programs\Python\Python310\python.exe monitor/monitor_engine.py ssh
+
+Id        : 7864
+StartTime : 2026-10-22 3:44:29 PM
+CmdLine   : python monitor/reader.py
+
+Id        : 7944
+StartTime : 2026-10-22 3:44:28 PM
+CmdLine   : C:\Users\user\AppData\Local\Programs\Python\Python310\python.exe orchestrator.py
+
+Id        : 8052
+StartTime : 2026-10-22 3:44:28 PM
+CmdLine   : C:\Users\user\AppData\Local\Programs\Python\Python310\python.exe monitor/monitor_engine.py sensor
+
+Id        : 9792
+StartTime : 2026-10-22 3:44:28 PM
+CmdLine   : C:\Users\user\AppData\Local\Programs\Python\Python310\python.exe ais/ais_engine.py ssh
+
+Id        : 11604
+StartTime : 2026-10-22 5:04:40 PM
+CmdLine   : C:\Users\user\AppData\Local\Programs\Python\Python310\python.exe response/response_engine.py ssh
+
+Id        : 13612
+StartTime : 2026-10-22 3:44:28 PM
+CmdLine   : C:\Users\user\AppData\Local\Programs\Python\Python310\python.exe state/state_engine.py sensor
+
+Id        : 14156
+StartTime : 2026-10-22 3:44:21 PM
+CmdLine   : python  config_interactive.py
+
+Id        : 14260
+StartTime : 2026-10-22 5:04:40 PM
+CmdLine   : C:\Users\user\AppData\Local\Programs\Python\Python310\python.exe state/state_engine.py ssh
+
+
+
+PS C:\Users\user\Desktop\acf_shared\acf_platform> cls
+PS C:\Users\user\Desktop\acf_shared\acf_platform> $bb = Get-Content $env:TEMP\acf_state.json -Raw | ConvertFrom-Json
+"=== PRE-KILL ==="
+"state:            $($bb.layer_3_state_ssh.state)"
+"input_source:     $($bb.layer_3_state_ssh.detail.input_source)"
+"state_timestamp:  $($bb.layer_3_state_ssh.state_timestamp)"
+"ais_timestamp:    $($bb.layer_2_ais_ssh.ais_timestamp)"
+"ais_healthy:      $($bb.layer_2_ais_ssh.ais_healthy)"
+"now:              $(Get-Date -Format o)"
+""
+"=== PYTHON PROCESSES ==="
+Get-Process python* -ErrorAction SilentlyContinue | Select-Object Id, StartTime, @{n='CmdLine';e={(Get-CimInstance Win32_Process -Filter "ProcessId=$($_.Id)").CommandLine}} | Format-List
+=== PRE-KILL ===
+state:            GREEN
+input_source:     layer_1_monitor_ssh
+state_timestamp:  1792685114.2412815
+ais_timestamp:    1792685114.9950128
+ais_healthy:      False
+now:              2026-10-22T17:05:24.5913983+01:00
+
+=== PYTHON PROCESSES ===
+
+
+Id        : 1220
+StartTime : 2026-10-22 3:44:28 PM
+CmdLine   : C:\Users\user\AppData\Local\Programs\Python\Python310\python.exe ais/ais_engine.py sensor
+
+Id        : 6304
+StartTime : 2026-10-22 3:44:28 PM
+CmdLine   : C:\Users\user\AppData\Local\Programs\Python\Python310\python.exe response/response_engine.py sensor
+
+Id        : 6932
+StartTime : 2026-10-22 3:44:28 PM
+CmdLine   : C:\Users\user\AppData\Local\Programs\Python\Python310\python.exe monitor/monitor_engine.py ssh
+
+Id        : 7864
+StartTime : 2026-10-22 3:44:29 PM
+CmdLine   : python monitor/reader.py
+
+Id        : 7944
+StartTime : 2026-10-22 3:44:28 PM
+CmdLine   : C:\Users\user\AppData\Local\Programs\Python\Python310\python.exe orchestrator.py
+
+Id        : 8052
+StartTime : 2026-10-22 3:44:28 PM
+CmdLine   : C:\Users\user\AppData\Local\Programs\Python\Python310\python.exe monitor/monitor_engine.py sensor
+
+Id        : 9792
+StartTime : 2026-10-22 3:44:28 PM
+CmdLine   : C:\Users\user\AppData\Local\Programs\Python\Python310\python.exe ais/ais_engine.py ssh
+
+Id        : 11604
+StartTime : 2026-10-22 5:04:40 PM
+CmdLine   : C:\Users\user\AppData\Local\Programs\Python\Python310\python.exe response/response_engine.py ssh
+
+Id        : 13612
+StartTime : 2026-10-22 3:44:28 PM
+CmdLine   : C:\Users\user\AppData\Local\Programs\Python\Python310\python.exe state/state_engine.py sensor
+
+Id        : 14156
+StartTime : 2026-10-22 3:44:21 PM
+CmdLine   : python  config_interactive.py
+
+Id        : 14260
+StartTime : 2026-10-22 5:04:40 PM
+CmdLine   : C:\Users\user\AppData\Local\Programs\Python\Python310\python.exe state/state_engine.py ssh
+
+
+
+PS C:\Users\user\Desktop\acf_shared\acf_platform> cls
+PS C:\Users\user\Desktop\acf_shared\acf_platform> $bb = Get-Content $env:TEMP\acf_state.json -Raw | ConvertFrom-Json
+"=== GATE 3 BASELINE ==="
+"state:            $($bb.layer_3_state_ssh.state)"
+"input_source:     $($bb.layer_3_state_ssh.detail.input_source)"
+"ais_timestamp:    $($bb.layer_2_ais_ssh.ais_timestamp)"
+"ais_healthy:      $($bb.layer_2_ais_ssh.ais_healthy)"
+"state_timestamp:  $($bb.layer_3_state_ssh.state_timestamp)"
+"now:              $(Get-Date -Format o)"
+=== GATE 3 BASELINE ===
+state:            GREEN
+input_source:     layer_2_ais
+ais_timestamp:    1792685648.7116802
+ais_healthy:      True
+state_timestamp:  1792685656.134748
+now:              2026-10-22T17:14:21.7693703+01:00
+PS C:\Users\user\Desktop\acf_shared\acf_platform> cls
+PS C:\Users\user\Desktop\acf_shared\acf_platform> $bb = Get-Content $env:TEMP\acf_state.json -Raw | ConvertFrom-Json
+"=== GATE 3 BASELINE ==="
+"state:            $($bb.layer_3_state_ssh.state)"
+"input_source:     $($bb.layer_3_state_ssh.detail.input_source)"
+"ais_timestamp:    $($bb.layer_2_ais_ssh.ais_timestamp)"
+"ais_healthy:      $($bb.layer_2_ais_ssh.ais_healthy)"
+"state_timestamp:  $($bb.layer_3_state_ssh.state_timestamp)"
+"now:              $(Get-Date -Format o)"
+=== GATE 3 BASELINE ===
+state:            GREEN
+input_source:     none
+ais_timestamp:    1792685698.2086284
+ais_healthy:      False
+state_timestamp:  1792685699.2187567
+now:              2026-10-22T17:15:01.0142365+01:00
+PS C:\Users\user\Desktop\acf_shared\acf_platform> $bb = Get-Content $env:TEMP\acf_state.json -Raw | ConvertFrom-Json
+$dis = $bb.disabled_capabilities
+if (-not $dis) { $dis = New-Object psobject }
+if (-not $dis.PSObject.Properties['ssh']) {
+    $dis | Add-Member -NotePropertyName ssh -NotePropertyValue @() -Force
+}
+if ($dis.ssh -notcontains "layer2") {
+    $dis.ssh = @($dis.ssh) + "layer2"
+}
+$bb.disabled_capabilities = $dis
+
+$json = $bb | ConvertTo-Json -Depth 20
+for ($i=0; $i -lt 5; $i++) {
+    try { Set-Content -Path $env:TEMP\acf_state.json -Value $json -Encoding UTF8 -ErrorAction Stop; break }
+    catch { Start-Sleep -Milliseconds 300 }
+}
+"Disabled: ssh layer2"
+"ssh entry: $($dis.ssh -join ', ')"
+"Waiting 15 s for orchestrator to stop AIS..."
+Start-Sleep -Seconds 15
+$bb2 = Get-Content $env:TEMP\acf_state.json -Raw | ConvertFrom-Json
+"=== AFTER DISABLE ==="
+"input_source:     $($bb2.layer_3_state_ssh.detail.input_source)"
+"ais_timestamp:    $($bb2.layer_2_ais_ssh.ais_timestamp)"
+"ais_healthy:      $($bb2.layer_2_ais_ssh.ais_healthy)"
+"state_timestamp:  $($bb2.layer_3_state_ssh.state_timestamp)"
+"now:              $(Get-Date -Format o)"
+Disabled: ssh layer2
+ssh entry: layer2
+Waiting 15 s for orchestrator to stop AIS...
+Get-Content : Le processus ne peut pas accéder au fichier car un autre processus en a verrouillé une partie.
+
+Au caractère Ligne:21 : 8
++ $bb2 = Get-Content $env:TEMP\acf_state.json -Raw | ConvertFrom-Json
++        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ReadError: (C:\Users\user\A...\acf_state.json:String) [Get-Content], IOException
+    + FullyQualifiedErrorId : GetContentReaderIOError,Microsoft.PowerShell.Commands.GetContentCommand
+Get-Content : Le processus ne peut pas accéder au fichier car un autre processus en a verrouillé une partie.
+
+Au caractère Ligne:21 : 8
++ $bb2 = Get-Content $env:TEMP\acf_state.json -Raw | ConvertFrom-Json
++        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ReadError: (C:\Users\user\A...\acf_state.json:String) [Get-Content], IOException
+    + FullyQualifiedErrorId : GetContentReaderIOError,Microsoft.PowerShell.Commands.GetContentCommand
+
+=== AFTER DISABLE ===
+input_source:
+ais_timestamp:
+ais_healthy:
+state_timestamp:
+now:              2026-10-22T17:15:37.5680873+01:00
+PS C:\Users\user\Desktop\acf_shared\acf_platform> "Waiting 35 s for freshness gate..."
+Start-Sleep -Seconds 35
+$bb = Get-Content $env:TEMP\acf_state.json -Raw | ConvertFrom-Json
+"=== FALLBACK CAPTURE ==="
+"state:            $($bb.layer_3_state_ssh.state)"
+"input_source:     $($bb.layer_3_state_ssh.detail.input_source)"
+"ais_timestamp:    $($bb.layer_2_ais_ssh.ais_timestamp)"
+"ais_healthy:      $($bb.layer_2_ais_ssh.ais_healthy)"
+"state_timestamp:  $($bb.layer_3_state_ssh.state_timestamp)"
+"now:              $(Get-Date -Format o)"
+"age_of_AIS:       $([math]::Round([DateTimeOffset]::Now.ToUnixTimeSeconds() - $bb.layer_2_ais_ssh.ais_timestamp, 1)) s"
+"age_of_state:     $([math]::Round([DateTimeOffset]::Now.ToUnixTimeSeconds() - $bb.layer_3_state_ssh.state_timestamp, 1)) s"
+Waiting 35 s for freshness gate...
+=== FALLBACK CAPTURE ===
+state:            GREEN
+input_source:     layer_2_ais
+ais_timestamp:    1792685790.5667157
+ais_healthy:      True
+state_timestamp:  1792685798.0444822
+now:              2026-10-22T17:16:39.6866748+01:00
+age_of_AIS:       8.4 s
+age_of_state:     1.0 s
+PS C:\Users\user\Desktop\acf_shared\acf_platform> cls
+PS C:\Users\user\Desktop\acf_shared\acf_platform> $bb = Get-Content $env:TEMP\acf_state.json -Raw | ConvertFrom-Json
+"ais_healthy:     $($bb.layer_2_ais_ssh.ais_healthy)"
+"monitor_healthy: $($bb.layer_1_monitor_ssh.monitor_healthy)"
+"reader_ready:    $($bb.reader_ssh.reader_ready)"
+"input_source:    $($bb.layer_3_state_ssh.detail.input_source)"
+"state:           $($bb.layer_3_state_ssh.state)"
+ais_healthy:     True
+monitor_healthy: False
+reader_ready:    True
+input_source:    none
+state:           GREEN
+PS C:\Users\user\Desktop\acf_shared\acf_platform> PS C:\Users\user\Desktop\acf_shared\acf_platform> $bb = Get-Content $env:TEMP\acf_state.json -Raw | ConvertFrom-Json
+>> "ais_healthy:     $($bb.layer_2_ais_ssh.ais_healthy)"
+>> "monitor_healthy: $($bb.layer_1_monitor_ssh.monitor_healthy)"
+>> "reader_ready:    $($bb.reader_ssh.reader_ready)"
+>> "input_source:    $($bb.layer_3_state_ssh.detail.input_source)"
+>> "state:           $($bb.layer_3_state_ssh.state)"
+ais_healthy:     True
+monitor_healthy: False
+reader_ready:    True
+input_source:    none
+state:           GREEN
+PS C:\Users\user\Desktop\acf_shared\acf_platform>
+
+
+
+
+
+
+
+
+>> Erreur de terminaison (Get-Process) : « Impossible de trouver un paramètre positionnel acceptant l'argument « @{layer_4a_response_ssh=; layer_4a_response_sensor=; layer_1_monitor_ssh=; layer_1_monitor_sensor=; layer_1_monitor_defender=; layer_1_monitor_pfirewall=; layer_3_state_ssh=; layer_3_state_sensor=; reader_ssh=; layer_3_state_defender=; layer_3_state_pfirewall=; reader_defender=; reader_pfirewall=; layer_2_groups_ssh=; layer_2_ais_ssh=; layer_2_groups_sensor=; layer_2_ais_sensor=; layer_2_groups_defender=; layer_2_ais_defender=; layer_2_groups_pfirewall=; layer_2_ais_pfirewall=; layer_2_correlated=} ». »
+Get-Process : Impossible de trouver un paramètre positionnel acceptant l'argument «@{layer_4a_response_ssh=; 
+layer_4a_response_sensor=; layer_1_monitor_ssh=; layer_1_monitor_sensor=; layer_1_monitor_defender=; 
+layer_1_monitor_pfirewall=; layer_3_state_ssh=; layer_3_state_sensor=; reader_ssh=; layer_3_state_defender=; 
+layer_3_state_pfirewall=; reader_defender=; reader_pfirewall=; layer_2_groups_ssh=; layer_2_ais_ssh=; 
+layer_2_groups_sensor=; layer_2_ais_sensor=; layer_2_groups_defender=; layer_2_ais_defender=; 
+layer_2_groups_pfirewall=; layer_2_ais_pfirewall=; layer_2_correlated=}».
+Au caractère Ligne:1 : 1
++ PS C:\Users\user\Desktop\acf_shared\acf_platform> $bb = Get-Content $ ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidArgument : (:) [Get-Process], ParameterBindingException
+    + FullyQualifiedErrorId : PositionalParameterNotFound,Microsoft.PowerShell.Commands.GetProcessCommand
+Get-Process : Impossible de trouver un paramètre positionnel acceptant l'argument «@{layer_4a_response_ssh=; layer_4a_response_sensor=; layer_1_monitor_ssh=; layer_1_monitor_sensor=;
+layer_1_monitor_defender=; layer_1_monitor_pfirewall=; layer_3_state_ssh=; layer_3_state_sensor=; reader_ssh=; layer_3_state_defender=; layer_3_state_pfirewall=; reader_defender=;
+reader_pfirewall=; layer_2_groups_ssh=; layer_2_ais_ssh=; layer_2_groups_sensor=; layer_2_ais_sensor=; layer_2_groups_defender=; layer_2_ais_defender=; layer_2_groups_pfirewall=;
+layer_2_ais_pfirewall=; layer_2_correlated=}».
+Au caractère Ligne:1 : 1
++ PS C:\Users\user\Desktop\acf_shared\acf_platform> $bb = Get-Content $ ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidArgument : (:) [Get-Process], ParameterBindingException
+    + FullyQualifiedErrorId : PositionalParameterNotFound,Microsoft.PowerShell.Commands.GetProcessCommand
+
+>> : Le terme «>>» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme 
+exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe, vérifiez que le chemin d'accès est correct 
+et réessayez.
+Au caractère Ligne:2 : 1
++ >> "ais_healthy:     $($bb.layer_2_ais_ssh.ais_healthy)"
++ ~~
+    + CategoryInfo          : ObjectNotFound: (>>:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+>> : Le terme «>>» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe,
+vérifiez que le chemin d'accès est correct et réessayez.
+Au caractère Ligne:2 : 1
++ >> "ais_healthy:     $($bb.layer_2_ais_ssh.ais_healthy)"
++ ~~
+    + CategoryInfo          : ObjectNotFound: (>>:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+>> : Le terme «>>» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme 
+exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe, vérifiez que le chemin d'accès est correct 
+et réessayez.
+Au caractère Ligne:3 : 1
++ >> "monitor_healthy: $($bb.layer_1_monitor_ssh.monitor_healthy)"
++ ~~
+    + CategoryInfo          : ObjectNotFound: (>>:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+>> : Le terme «>>» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe,
+vérifiez que le chemin d'accès est correct et réessayez.
+Au caractère Ligne:3 : 1
++ >> "monitor_healthy: $($bb.layer_1_monitor_ssh.monitor_healthy)"
++ ~~
+    + CategoryInfo          : ObjectNotFound: (>>:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+>> : Le terme «>>» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme 
+exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe, vérifiez que le chemin d'accès est correct 
+et réessayez.
+Au caractère Ligne:4 : 1
++ >> "reader_ready:    $($bb.reader_ssh.reader_ready)"
++ ~~
+    + CategoryInfo          : ObjectNotFound: (>>:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+>> : Le terme «>>» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe,
+vérifiez que le chemin d'accès est correct et réessayez.
+Au caractère Ligne:4 : 1
++ >> "reader_ready:    $($bb.reader_ssh.reader_ready)"
++ ~~
+    + CategoryInfo          : ObjectNotFound: (>>:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+>> : Le terme «>>» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme 
+exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe, vérifiez que le chemin d'accès est correct 
+et réessayez.
+Au caractère Ligne:5 : 1
++ >> "input_source:    $($bb.layer_3_state_ssh.detail.input_source)"
++ ~~
+    + CategoryInfo          : ObjectNotFound: (>>:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+>> : Le terme «>>» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe,
+vérifiez que le chemin d'accès est correct et réessayez.
+Au caractère Ligne:5 : 1
++ >> "input_source:    $($bb.layer_3_state_ssh.detail.input_source)"
++ ~~
+    + CategoryInfo          : ObjectNotFound: (>>:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+>> : Le terme «>>» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme 
+exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe, vérifiez que le chemin d'accès est correct 
+et réessayez.
+Au caractère Ligne:6 : 1
++ >> "state:           $($bb.layer_3_state_ssh.state)"
++ ~~
+    + CategoryInfo          : ObjectNotFound: (>>:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+>> : Le terme «>>» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe,
+vérifiez que le chemin d'accès est correct et réessayez.
+Au caractère Ligne:6 : 1
++ >> "state:           $($bb.layer_3_state_ssh.state)"
++ ~~
+    + CategoryInfo          : ObjectNotFound: (>>:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+ais_healthy: : Le terme «ais_healthy:» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou 
+programme exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe, vérifiez que le chemin d'accès est 
+correct et réessayez.
+Au caractère Ligne:7 : 1
++ ais_healthy:     True
++ ~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (ais_healthy::String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ais_healthy: : Le terme «ais_healthy:» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme exécutable. Vérifiez l'orthographe du nom, ou si un
+chemin d'accès existe, vérifiez que le chemin d'accès est correct et réessayez.
+Au caractère Ligne:7 : 1
++ ais_healthy:     True
++ ~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (ais_healthy::String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+monitor_healthy: : Le terme «monitor_healthy:» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de 
+script ou programme exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe, vérifiez que le chemin 
+d'accès est correct et réessayez.
+Au caractère Ligne:8 : 1
++ monitor_healthy: False
++ ~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (monitor_healthy::String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+monitor_healthy: : Le terme «monitor_healthy:» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme exécutable. Vérifiez l'orthographe du nom, ou si
+un chemin d'accès existe, vérifiez que le chemin d'accès est correct et réessayez.
+Au caractère Ligne:8 : 1
++ monitor_healthy: False
++ ~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (monitor_healthy::String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+reader_ready: : Le terme «reader_ready:» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script 
+ou programme exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe, vérifiez que le chemin d'accès 
+est correct et réessayez.
+Au caractère Ligne:9 : 1
++ reader_ready:    True
++ ~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (reader_ready::String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+reader_ready: : Le terme «reader_ready:» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme exécutable. Vérifiez l'orthographe du nom, ou si un
+chemin d'accès existe, vérifiez que le chemin d'accès est correct et réessayez.
+Au caractère Ligne:9 : 1
++ reader_ready:    True
++ ~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (reader_ready::String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+input_source: : Le terme «input_source:» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script 
+ou programme exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe, vérifiez que le chemin d'accès 
+est correct et réessayez.
+Au caractère Ligne:10 : 1
++ input_source:    none
++ ~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (input_source::String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+input_source: : Le terme «input_source:» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme exécutable. Vérifiez l'orthographe du nom, ou si un
+chemin d'accès existe, vérifiez que le chemin d'accès est correct et réessayez.
+Au caractère Ligne:10 : 1
++ input_source:    none
++ ~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (input_source::String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+state: : Le terme «state:» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme 
+exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe, vérifiez que le chemin d'accès est correct 
+et réessayez.
+Au caractère Ligne:11 : 1
++ state:           GREEN
++ ~~~~~~
+    + CategoryInfo          : ObjectNotFound: (state::String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+state: : Le terme «state:» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès
+existe, vérifiez que le chemin d'accès est correct et réessayez.
+Au caractère Ligne:11 : 1
++ state:           GREEN
++ ~~~~~~
+    + CategoryInfo          : ObjectNotFound: (state::String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+PS : Impossible de trouver un processus nommé «C:\Users\user\Desktop\acf_shared\acf_platform>». Vérifiez le nom du 
+processus et appelez de nouveau l'applet de commande.
+Au caractère Ligne:12 : 1
++ PS C:\Users\user\Desktop\acf_shared\acf_platform>
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Users\user\D...d\acf_platform>:String) [Get-Process], 
+ProcessCommandException
+    + FullyQualifiedErrorId : NoProcessFoundForGivenName,Microsoft.PowerShell.Commands.GetProcessCommand
+PS : Impossible de trouver un processus nommé « C:\Users\user\Desktop\acf_shared\acf_platform> ». Vérifiez le nom du processus et appelez de nouveau l'applet de commande.
+Au caractère Ligne:12 : 1
++ PS C:\Users\user\Desktop\acf_shared\acf_platform>
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Users\user\D...d\acf_platform>:String) [Get-Process], ProcessCommandException
+    + FullyQualifiedErrorId : NoProcessFoundForGivenName,Microsoft.PowerShell.Commands.GetProcessCommand
+
+PS C:\Users\user\Desktop\acf_shared\acf_platform> clear
+PS C:\Users\user\Desktop\acf_shared\acf_platform> PS C:\Users\user\Desktop\acf_shared\acf_platform> $bb = Get-Content $env:TEMP\acf_state.json -Raw | ConvertFrom-Json
+>> "ais_healthy:     $($bb.layer_2_ais_ssh.ais_healthy)"
+>> "monitor_healthy: $($bb.layer_1_monitor_ssh.monitor_healthy)"
+>> "reader_ready:    $($bb.reader_ssh.reader_ready)"
+>> "input_source:    $($bb.layer_3_state_ssh.detail.input_source)"
+>> "state:           $($bb.layer_3_state_ssh.state)"
+ais_healthy:     True
+monitor_healthy: False
+reader_ready:    True
+input_source:    none
+state:           GREEN
+PS C:\Users\user\Desktop\acf_shared\acf_platform>
+
+
+
+
+
+
+
+
+>> Erreur de terminaison (Get-Process) : « Impossible de trouver un paramètre positionnel acceptant l'argument « @{layer_4a_response_ssh=; layer_4a_response_sensor=; layer_1_monitor_ssh=; layer_1_monitor_sensor=; layer_1_monitor_defender=; layer_1_monitor_pfirewall=; layer_3_state_ssh=; layer_3_state_sensor=; reader_ssh=; layer_3_state_defender=; layer_3_state_pfirewall=; reader_defender=; reader_pfirewall=; layer_2_groups_ssh=; layer_2_ais_ssh=; layer_2_groups_sensor=; layer_2_ais_sensor=; layer_2_groups_defender=; layer_2_ais_defender=; layer_2_groups_pfirewall=; layer_2_ais_pfirewall=; layer_2_correlated=} ». »
+Get-Process : Impossible de trouver un paramètre positionnel acceptant l'argument «@{layer_4a_response_ssh=; 
+layer_4a_response_sensor=; layer_1_monitor_ssh=; layer_1_monitor_sensor=; layer_1_monitor_defender=; 
+layer_1_monitor_pfirewall=; layer_3_state_ssh=; layer_3_state_sensor=; reader_ssh=; layer_3_state_defender=; 
+layer_3_state_pfirewall=; reader_defender=; reader_pfirewall=; layer_2_groups_ssh=; layer_2_ais_ssh=; 
+layer_2_groups_sensor=; layer_2_ais_sensor=; layer_2_groups_defender=; layer_2_ais_defender=; 
+layer_2_groups_pfirewall=; layer_2_ais_pfirewall=; layer_2_correlated=}».
+Au caractère Ligne:1 : 1
++ PS C:\Users\user\Desktop\acf_shared\acf_platform> $bb = Get-Content $ ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidArgument : (:) [Get-Process], ParameterBindingException
+    + FullyQualifiedErrorId : PositionalParameterNotFound,Microsoft.PowerShell.Commands.GetProcessCommand
+Get-Process : Impossible de trouver un paramètre positionnel acceptant l'argument «@{layer_4a_response_ssh=; layer_4a_response_sensor=; layer_1_monitor_ssh=; layer_1_monitor_sensor=;
+layer_1_monitor_defender=; layer_1_monitor_pfirewall=; layer_3_state_ssh=; layer_3_state_sensor=; reader_ssh=; layer_3_state_defender=; layer_3_state_pfirewall=; reader_defender=;
+reader_pfirewall=; layer_2_groups_ssh=; layer_2_ais_ssh=; layer_2_groups_sensor=; layer_2_ais_sensor=; layer_2_groups_defender=; layer_2_ais_defender=; layer_2_groups_pfirewall=;
+layer_2_ais_pfirewall=; layer_2_correlated=}».
+Au caractère Ligne:1 : 1
++ PS C:\Users\user\Desktop\acf_shared\acf_platform> $bb = Get-Content $ ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidArgument : (:) [Get-Process], ParameterBindingException
+    + FullyQualifiedErrorId : PositionalParameterNotFound,Microsoft.PowerShell.Commands.GetProcessCommand
+
+>> : Le terme «>>» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme 
+exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe, vérifiez que le chemin d'accès est correct 
+et réessayez.
+Au caractère Ligne:2 : 1
++ >> "ais_healthy:     $($bb.layer_2_ais_ssh.ais_healthy)"
++ ~~
+    + CategoryInfo          : ObjectNotFound: (>>:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+>> : Le terme «>>» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe,
+vérifiez que le chemin d'accès est correct et réessayez.
+Au caractère Ligne:2 : 1
++ >> "ais_healthy:     $($bb.layer_2_ais_ssh.ais_healthy)"
++ ~~
+    + CategoryInfo          : ObjectNotFound: (>>:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+>> : Le terme «>>» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme 
+exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe, vérifiez que le chemin d'accès est correct 
+et réessayez.
+Au caractère Ligne:3 : 1
++ >> "monitor_healthy: $($bb.layer_1_monitor_ssh.monitor_healthy)"
++ ~~
+    + CategoryInfo          : ObjectNotFound: (>>:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+>> : Le terme «>>» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe,
+vérifiez que le chemin d'accès est correct et réessayez.
+Au caractère Ligne:3 : 1
++ >> "monitor_healthy: $($bb.layer_1_monitor_ssh.monitor_healthy)"
++ ~~
+    + CategoryInfo          : ObjectNotFound: (>>:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+>> : Le terme «>>» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme 
+exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe, vérifiez que le chemin d'accès est correct 
+et réessayez.
+Au caractère Ligne:4 : 1
++ >> "reader_ready:    $($bb.reader_ssh.reader_ready)"
++ ~~
+    + CategoryInfo          : ObjectNotFound: (>>:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+>> : Le terme «>>» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe,
+vérifiez que le chemin d'accès est correct et réessayez.
+Au caractère Ligne:4 : 1
++ >> "reader_ready:    $($bb.reader_ssh.reader_ready)"
++ ~~
+    + CategoryInfo          : ObjectNotFound: (>>:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+>> : Le terme «>>» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme 
+exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe, vérifiez que le chemin d'accès est correct 
+et réessayez.
+Au caractère Ligne:5 : 1
++ >> "input_source:    $($bb.layer_3_state_ssh.detail.input_source)"
++ ~~
+    + CategoryInfo          : ObjectNotFound: (>>:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+>> : Le terme «>>» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe,
+vérifiez que le chemin d'accès est correct et réessayez.
+Au caractère Ligne:5 : 1
++ >> "input_source:    $($bb.layer_3_state_ssh.detail.input_source)"
++ ~~
+    + CategoryInfo          : ObjectNotFound: (>>:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+>> : Le terme «>>» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme 
+exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe, vérifiez que le chemin d'accès est correct 
+et réessayez.
+Au caractère Ligne:6 : 1
++ >> "state:           $($bb.layer_3_state_ssh.state)"
++ ~~
+    + CategoryInfo          : ObjectNotFound: (>>:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+>> : Le terme «>>» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe,
+vérifiez que le chemin d'accès est correct et réessayez.
+Au caractère Ligne:6 : 1
++ >> "state:           $($bb.layer_3_state_ssh.state)"
++ ~~
+    + CategoryInfo          : ObjectNotFound: (>>:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+ais_healthy: : Le terme «ais_healthy:» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou 
+programme exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe, vérifiez que le chemin d'accès est 
+correct et réessayez.
+Au caractère Ligne:7 : 1
++ ais_healthy:     True
++ ~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (ais_healthy::String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ais_healthy: : Le terme «ais_healthy:» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme exécutable. Vérifiez l'orthographe du nom, ou si un
+chemin d'accès existe, vérifiez que le chemin d'accès est correct et réessayez.
+Au caractère Ligne:7 : 1
++ ais_healthy:     True
++ ~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (ais_healthy::String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+monitor_healthy: : Le terme «monitor_healthy:» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de 
+script ou programme exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe, vérifiez que le chemin 
+d'accès est correct et réessayez.
+Au caractère Ligne:8 : 1
++ monitor_healthy: False
++ ~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (monitor_healthy::String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+monitor_healthy: : Le terme «monitor_healthy:» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme exécutable. Vérifiez l'orthographe du nom, ou si
+un chemin d'accès existe, vérifiez que le chemin d'accès est correct et réessayez.
+Au caractère Ligne:8 : 1
++ monitor_healthy: False
++ ~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (monitor_healthy::String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+reader_ready: : Le terme «reader_ready:» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script 
+ou programme exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe, vérifiez que le chemin d'accès 
+est correct et réessayez.
+Au caractère Ligne:9 : 1
++ reader_ready:    True
++ ~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (reader_ready::String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+reader_ready: : Le terme «reader_ready:» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme exécutable. Vérifiez l'orthographe du nom, ou si un
+chemin d'accès existe, vérifiez que le chemin d'accès est correct et réessayez.
+Au caractère Ligne:9 : 1
++ reader_ready:    True
++ ~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (reader_ready::String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+input_source: : Le terme «input_source:» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script 
+ou programme exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe, vérifiez que le chemin d'accès 
+est correct et réessayez.
+Au caractère Ligne:10 : 1
++ input_source:    none
++ ~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (input_source::String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+input_source: : Le terme «input_source:» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme exécutable. Vérifiez l'orthographe du nom, ou si un
+chemin d'accès existe, vérifiez que le chemin d'accès est correct et réessayez.
+Au caractère Ligne:10 : 1
++ input_source:    none
++ ~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (input_source::String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+state: : Le terme «state:» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme 
+exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe, vérifiez que le chemin d'accès est correct 
+et réessayez.
+Au caractère Ligne:11 : 1
++ state:           GREEN
++ ~~~~~~
+    + CategoryInfo          : ObjectNotFound: (state::String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+state: : Le terme «state:» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès
+existe, vérifiez que le chemin d'accès est correct et réessayez.
+Au caractère Ligne:11 : 1
++ state:           GREEN
++ ~~~~~~
+    + CategoryInfo          : ObjectNotFound: (state::String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+PS : Impossible de trouver un processus nommé «C:\Users\user\Desktop\acf_shared\acf_platform>». Vérifiez le nom du 
+processus et appelez de nouveau l'applet de commande.
+Au caractère Ligne:12 : 1
++ PS C:\Users\user\Desktop\acf_shared\acf_platform>
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Users\user\D...d\acf_platform>:String) [Get-Process], 
+ProcessCommandException
+    + FullyQualifiedErrorId : NoProcessFoundForGivenName,Microsoft.PowerShell.Commands.GetProcessCommand
+PS : Impossible de trouver un processus nommé « C:\Users\user\Desktop\acf_shared\acf_platform> ». Vérifiez le nom du processus et appelez de nouveau l'applet de commande.
+Au caractère Ligne:12 : 1
++ PS C:\Users\user\Desktop\acf_shared\acf_platform>
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Users\user\D...d\acf_platform>:String) [Get-Process], ProcessCommandException
+    + FullyQualifiedErrorId : NoProcessFoundForGivenName,Microsoft.PowerShell.Commands.GetProcessCommand
+
+PS C:\Users\user\Desktop\acf_shared\acf_platform> cls
+PS C:\Users\user\Desktop\acf_shared\acf_platform> PS C:\Users\user\Desktop\acf_shared\acf_platform> $bb = Get-Content $env:TEMP\acf_state.json -Raw | ConvertFrom-Json
+>> "ais_healthy:     $($bb.layer_2_ais_ssh.ais_healthy)"
+>> "monitor_healthy: $($bb.layer_1_monitor_ssh.monitor_healthy)"
+>> "reader_ready:    $($bb.reader_ssh.reader_ready)"
+>> "input_source:    $($bb.layer_3_state_ssh.detail.input_source)"
+>> "state:           $($bb.layer_3_state_ssh.state)"
+ais_healthy:     True
+monitor_healthy: False
+reader_ready:    True
+input_sou
+>> Erreur de terminaison (Get-Process) : « Impossible de trouver un paramètre positionnel acceptant l'argument « @{layer_4a_response_ssh=; layer_4a_response_sensor=; layer_1_monitor_ssh=; layer_1_monitor_sensor=; layer_1_monitor_defender=; layer_1_monitor_pfirewall=; layer_3_state_ssh=; layer_3_state_sensor=; reader_ssh=; layer_3_state_defender=; layer_3_state_pfirewall=; reader_defender=; reader_pfirewall=; layer_2_groups_ssh=; layer_2_ais_ssh=; layer_2_groups_sensor=; layer_2_ais_sensor=; layer_2_groups_defender=; layer_2_ais_defender=; layer_2_groups_pfirewall=; layer_2_ais_pfirewall=; layer_2_correlated=} ». »
+Get-Process : Impossible de trouver un paramètre positionnel acceptant l'argument «@{layer_4a_response_ssh=; 
+layer_4a_response_sensor=; layer_1_monitor_ssh=; layer_1_monitor_sensor=; layer_1_monitor_defender=; 
+layer_1_monitor_pfirewall=; layer_3_state_ssh=; layer_3_state_sensor=; reader_ssh=; layer_3_state_defender=; 
+layer_3_state_pfirewall=; reader_defender=; reader_pfirewall=; layer_2_groups_ssh=; layer_2_ais_ssh=; 
+layer_2_groups_sensor=; layer_2_ais_sensor=; layer_2_groups_defender=; layer_2_ais_defender=; 
+layer_2_groups_pfirewall=; layer_2_ais_pfirewall=; layer_2_correlated=}».
+Au caractère Ligne:1 : 1
++ PS C:\Users\user\Desktop\acf_shared\acf_platform> $bb = Get-Content $ ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidArgument : (:) [Get-Process], ParameterBindingException
+    + FullyQualifiedErrorId : PositionalParameterNotFound,Microsoft.PowerShell.Commands.GetProcessCommand
+Get-Process : Impossible de trouver un paramètre positionnel acceptant l'argument «@{layer_4a_response_ssh=; layer_4a_response_sensor=; layer_1_monitor_ssh=; layer_1_monitor_sensor=;
+layer_1_monitor_defender=; layer_1_monitor_pfirewall=; layer_3_state_ssh=; layer_3_state_sensor=; reader_ssh=; layer_3_state_defender=; layer_3_state_pfirewall=; reader_defender=;
+reader_pfirewall=; layer_2_groups_ssh=; layer_2_ais_ssh=; layer_2_groups_sensor=; layer_2_ais_sensor=; layer_2_groups_defender=; layer_2_ais_defender=; layer_2_groups_pfirewall=;
+layer_2_ais_pfirewall=; layer_2_correlated=}».
+Au caractère Ligne:1 : 1
++ PS C:\Users\user\Desktop\acf_shared\acf_platform> $bb = Get-Content $ ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidArgument : (:) [Get-Process], ParameterBindingException
+    + FullyQualifiedErrorId : PositionalParameterNotFound,Microsoft.PowerShell.Commands.GetProcessCommand
+
+>> : Le terme «>>» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme 
+exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe, vérifiez que le chemin d'accès est correct 
+et réessayez.
+Au caractère Ligne:2 : 1
++ >> "ais_healthy:     $($bb.layer_2_ais_ssh.ais_healthy)"
++ ~~
+    + CategoryInfo          : ObjectNotFound: (>>:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+>> : Le terme «>>» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe,
+vérifiez que le chemin d'accès est correct et réessayez.
+Au caractère Ligne:2 : 1
++ >> "ais_healthy:     $($bb.layer_2_ais_ssh.ais_healthy)"
++ ~~
+    + CategoryInfo          : ObjectNotFound: (>>:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+>> : Le terme «>>» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme 
+exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe, vérifiez que le chemin d'accès est correct 
+et réessayez.
+Au caractère Ligne:3 : 1
++ >> "monitor_healthy: $($bb.layer_1_monitor_ssh.monitor_healthy)"
++ ~~
+    + CategoryInfo          : ObjectNotFound: (>>:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+>> : Le terme «>>» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe,
+vérifiez que le chemin d'accès est correct et réessayez.
+Au caractère Ligne:3 : 1
++ >> "monitor_healthy: $($bb.layer_1_monitor_ssh.monitor_healthy)"
++ ~~
+    + CategoryInfo          : ObjectNotFound: (>>:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+>> : Le terme «>>» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme 
+exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe, vérifiez que le chemin d'accès est correct 
+et réessayez.
+Au caractère Ligne:4 : 1
++ >> "reader_ready:    $($bb.reader_ssh.reader_ready)"
++ ~~
+    + CategoryInfo          : ObjectNotFound: (>>:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+>> : Le terme «>>» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe,
+vérifiez que le chemin d'accès est correct et réessayez.
+Au caractère Ligne:4 : 1
++ >> "reader_ready:    $($bb.reader_ssh.reader_ready)"
++ ~~
+    + CategoryInfo          : ObjectNotFound: (>>:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+>> : Le terme «>>» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme 
+exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe, vérifiez que le chemin d'accès est correct 
+et réessayez.
+Au caractère Ligne:5 : 1
++ >> "input_source:    $($bb.layer_3_state_ssh.detail.input_source)"
++ ~~
+    + CategoryInfo          : ObjectNotFound: (>>:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+>> : Le terme «>>» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe,
+vérifiez que le chemin d'accès est correct et réessayez.
+Au caractère Ligne:5 : 1
++ >> "input_source:    $($bb.layer_3_state_ssh.detail.input_source)"
++ ~~
+    + CategoryInfo          : ObjectNotFound: (>>:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+>> : Le terme «>>» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme 
+exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe, vérifiez que le chemin d'accès est correct 
+et réessayez.
+Au caractère Ligne:6 : 1
++ >> "state:           $($bb.layer_3_state_ssh.state)"
++ ~~
+    + CategoryInfo          : ObjectNotFound: (>>:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+>> : Le terme «>>» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe,
+vérifiez que le chemin d'accès est correct et réessayez.
+Au caractère Ligne:6 : 1
++ >> "state:           $($bb.layer_3_state_ssh.state)"
++ ~~
+    + CategoryInfo          : ObjectNotFound: (>>:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+ais_healthy: : Le terme «ais_healthy:» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou 
+programme exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe, vérifiez que le chemin d'accès est 
+correct et réessayez.
+Au caractère Ligne:7 : 1
++ ais_healthy:     True
++ ~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (ais_healthy::String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ais_healthy: : Le terme «ais_healthy:» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme exécutable. Vérifiez l'orthographe du nom, ou si un
+chemin d'accès existe, vérifiez que le chemin d'accès est correct et réessayez.
+Au caractère Ligne:7 : 1
++ ais_healthy:     True
++ ~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (ais_healthy::String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+monitor_healthy: : Le terme «monitor_healthy:» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de 
+script ou programme exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe, vérifiez que le chemin 
+d'accès est correct et réessayez.
+Au caractère Ligne:8 : 1
++ monitor_healthy: False
++ ~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (monitor_healthy::String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+monitor_healthy: : Le terme «monitor_healthy:» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme exécutable. Vérifiez l'orthographe du nom, ou si
+un chemin d'accès existe, vérifiez que le chemin d'accès est correct et réessayez.
+Au caractère Ligne:8 : 1
++ monitor_healthy: False
++ ~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (monitor_healthy::String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+reader_ready: : Le terme «reader_ready:» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script 
+ou programme exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe, vérifiez que le chemin d'accès 
+est correct et réessayez.
+Au caractère Ligne:9 : 1
++ reader_ready:    True
++ ~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (reader_ready::String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+reader_ready: : Le terme «reader_ready:» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme exécutable. Vérifiez l'orthographe du nom, ou si un
+chemin d'accès existe, vérifiez que le chemin d'accès est correct et réessayez.
+Au caractère Ligne:9 : 1
++ reader_ready:    True
++ ~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (reader_ready::String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+input_sou : Le terme «input_sou» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou 
+programme exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe, vérifiez que le chemin d'accès est 
+correct et réessayez.
+Au caractère Ligne:10 : 1
++ input_sou
++ ~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (input_sou:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+input_sou : Le terme «input_sou» n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme exécutable. Vérifiez l'orthographe du nom, ou si un chemin
+d'accès existe, vérifiez que le chemin d'accès est correct et réessayez.
+Au caractère Ligne:10 : 1
++ input_sou
++ ~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (input_sou:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+PS C:\Users\user\Desktop\acf_shared\acf_platform> cls
+PS C:\Users\user\Desktop\acf_shared\acf_platform> function Get-BB {
+    for ($i = 0; $i -lt 5; $i++) {
+        try {
+            $raw = Get-Content $env:TEMP\acf_state.json -Raw -ErrorAction Stop
+            if ($raw -and $raw.Trim().Length -gt 0) {
+                return $raw | ConvertFrom-Json
+            }
+        } catch {}
+        Start-Sleep -Milliseconds 200
+    }
+    throw "Blackboard unreadable after 5 retries"
+}
+PS C:\Users\user\Desktop\acf_shared\acf_platform> $bb = Get-BB
+"ais_healthy:     $($bb.layer_2_ais_ssh.ais_healthy)"
+"monitor_healthy: $($bb.layer_1_monitor_ssh.monitor_healthy)"
+"reader_ready:    $($bb.reader_ssh.reader_ready)"
+"input_source:    $($bb.layer_3_state_ssh.detail.input_source)"
+"state:           $($bb.layer_3_state_ssh.state)"
+ais_healthy:     False
+monitor_healthy: True
+reader_ready:    True
+input_source:    layer_1_monitor_ssh
+state:           GREEN
+PS C:\Users\user\Desktop\acf_shared\acf_platform> $bb = Get-BB
+"ais_healthy:     $($bb.layer_2_ais_ssh.ais_healthy)"
+"monitor_healthy: $($bb.layer_1_monitor_ssh.monitor_healthy)"
+"reader_ready:    $($bb.reader_ssh.reader_ready)"
+"input_source:    $($bb.layer_3_state_ssh.detail.input_source)"
+ais_healthy:     False
+monitor_healthy: True
+reader_ready:    True
+input_source:    layer_1_monitor_ssh
+PS C:\Users\user\Desktop\acf_shared\acf_platform> $bb = Get-BB
+"ais_healthy:     $($bb.layer_2_ais_ssh.ais_healthy)"
+"monitor_healthy: $($bb.layer_1_monitor_ssh.monitor_healthy)"
+"reader_ready:    $($bb.reader_ssh.reader_ready)"
+"input_source:    $($bb.layer_3_state_ssh.detail.input_source)"
+>> Erreur de terminaison (Get-Content) : « L’exécution de la commande s’est arrêtée, car la variable de préférence « ErrorActionPreference » ou le paramètre courant a la valeur Stop : Le processus ne peut pas accéder au fichier car un autre processus en a verrouillé une partie.
+ »
+PS C:\Users\user\Desktop\acf_shared\acf_platform> Erreur de terminaison (Get-Content) : « L’exécution de la commande s’est arrêtée, car la variable de préférence « ErrorActionPreference » ou le paramètre courant a la valeur Stop : Le processus ne peut pas accéder au fichier car un autre processus en a verrouillé une partie.
+ »
+PS C:\Users\user\Desktop\acf_shared\acf_platform> Erreur de terminaison (Get-Content) : « L’exécution de la commande s’est arrêtée, car la variable de préférence « ErrorActionPreference » ou le paramètre courant a la valeur Stop : Le processus ne peut pas accéder au fichier car un autre processus en a verrouillé une partie.
+ »
+PS C:\Users\user\Desktop\acf_shared\acf_platform> Erreur de terminaison (Get-Content) : « L’exécution de la commande s’est arrêtée, car la variable de préférence « ErrorActionPreference » ou le paramètre courant a la valeur Stop : Le processus ne peut pas accéder au fichier car un autre processus en a verrouillé une partie.
+ »
+PS C:\Users\user\Desktop\acf_shared\acf_platform> Erreur de terminaison (Get-Content) : « L’exécution de la commande s’est arrêtée, car la variable de préférence « ErrorActionPreference » ou le paramètre courant a la valeur Stop : Le processus ne peut pas accéder au fichier car un autre processus en a verrouillé une partie.
+ »
+PS C:\Users\user\Desktop\acf_shared\acf_platform> Erreur de terminaison () : « Blackboard unreadable after 5 retries »
+>> Erreur de terminaison () : « Blackboard unreadable after 5 retries »
+Blackboard unreadable after 5 retries
+Blackboard unreadable after 5 retries
+Au caractère Ligne:11 : 5
++     throw "Blackboard unreadable after 5 retries"
++     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : OperationStopped: (Blackboard unreadable after 5 retries:String) [], RuntimeException
+    + FullyQualifiedErrorId : Blackboard unreadable after 5 retries
+
+PS C:\Users\user\Desktop\acf_shared\acf_platform> $bb = Get-BB
+"ais_healthy:     $($bb.layer_2_ais_ssh.ais_healthy)"
+"monitor_healthy: $($bb.layer_1_monitor_ssh.monitor_healthy)"
+"reader_ready:    $($bb.reader_ssh.reader_ready)"
+"input_source:    $($bb.layer_3_state_ssh.detail.input_source)"
+ais_healthy:     False
+monitor_healthy: True
+reader_ready:    True
+input_source:    none

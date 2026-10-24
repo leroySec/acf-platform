@@ -1,0 +1,42 @@
+PS C:\Users\user\Desktop\acf_shared\acf_platform> Get-Content C:\Users\user\Desktop\acf_shared\acf_platform\acf.log |
+>>     Select-String -Pattern "^\[ssh-(AIS|STATE|RESP)\] Thu Oct 22 16:5[012]" |
+>>     Select-Object -Last 30
+
+[ssh-STATE] Thu Oct 22 16:50:58 2026 | State: GREEN | Risk: 0 | Source: layer_1_monitor_ssh
+[ssh-STATE] Thu Oct 22 16:51:08 2026 | State: GREEN | Risk: 0 | Source: layer_1_monitor_ssh
+[ssh-STATE] Thu Oct 22 16:51:18 2026 | State: GREEN | Risk: 0 | Source: layer_1_monitor_ssh
+[ssh-AIS] Thu Oct 22 16:51:22 2026 | Risk: 0 | Attacker: 192.168.56.102 | Source: layer_1_monitor_ssh
+[ssh-STATE] Thu Oct 22 16:51:29 2026 | State: GREEN | Risk: 0 | Source: layer_2_ais
+[ssh-STATE] Thu Oct 22 16:51:39 2026 | State: GREEN | Risk: 0 | Source: layer_1_monitor_ssh
+[ssh-AIS] Thu Oct 22 16:51:42 2026 | Risk: 0 | Attacker: 192.168.56.102 | Source: layer_1_monitor_ssh
+[ssh-STATE] Thu Oct 22 16:51:50 2026 | State: GREEN | Risk: 0 | Source: layer_2_ais
+[ssh-AIS] Thu Oct 22 16:51:53 2026 | Risk: 0 | Attacker: 192.168.56.102 | Source: layer_1_monitor_ssh
+[ssh-RESP] Thu Oct 22 16:51:54 2026 | State: GREEN | Risk: 0 | Method: observe | Blocks: 0 | Isolated: False | Source:
+layer_3_state
+[ssh-STATE] Thu Oct 22 16:52:00 2026 | State: GREEN | Risk: 0 | Source: layer_2_ais
+[ssh-STATE] Thu Oct 22 16:52:10 2026 | State: GREEN | Risk: 0 | Source: layer_1_monitor_ssh
+[ssh-STATE] Thu Oct 22 16:52:20 2026 | State: YELLOW | Risk: 100 | Source: layer_1_monitor_ssh
+[ssh-RESP] Thu Oct 22 16:52:26 2026 | State: YELLOW | Risk: 100 | Method: observe | Blocks: 0 | Isolated: False |
+Source: layer_3_state
+[ssh-STATE] Thu Oct 22 16:52:28 2026 | State: ORANGE | Risk: 100 | Source: layer_1_monitor_ssh
+[ssh-AIS] Thu Oct 22 16:52:33 2026 | Risk: 100 | Attacker: 192.168.56.102 | Source: layer_1_monitor_ssh
+[ssh-RESP] Thu Oct 22 16:52:34 2026 | State: ORANGE | Risk: 100 | Method: observe | Blocks: 1 | Isolated: False |
+Source: layer_3_state
+[ssh-STATE] Thu Oct 22 16:52:39 2026 | State: RED | Risk: 100 | Source: layer_2_ais
+[ssh-AIS] Thu Oct 22 16:52:40 2026 | Risk: 74 | Attacker: 192.168.56.102 | Source: none
+[ssh-STATE] Thu Oct 22 16:52:42 2026 | State: RED | Risk: 74 | Source: layer_2_ais
+[ssh-RESP] Thu Oct 22 16:52:43 2026 | State: RED | Risk: 74 | Method: observe | Blocks: 1 | Isolated: False | Source:
+layer_3_state
+[ssh-AIS] Thu Oct 22 16:52:43 2026 | Risk: 100 | Attacker: 192.168.56.102 | Source: layer_1_monitor_ssh
+[ssh-STATE] Thu Oct 22 16:52:45 2026 | State: RED | Risk: 100 | Source: layer_2_ais
+[ssh-RESP] Thu Oct 22 16:52:46 2026 | State: RED | Risk: 100 | Method: observe | Blocks: 1 | Isolated: False | Source:
+layer_3_state
+[ssh-AIS] Thu Oct 22 16:52:50 2026 | Risk: 100 | Attacker: 192.168.56.102 | Source: layer_1_monitor_ssh
+[ssh-STATE] Thu Oct 22 16:52:52 2026 | State: RED | Risk: 100 | Source: layer_2_ais
+[ssh-RESP] Thu Oct 22 16:52:53 2026 | State: RED | Risk: 100 | Method: observe | Blocks: 1 | Isolated: False | Source:
+layer_3_state
+[ssh-STATE] Thu Oct 22 16:52:56 2026 | State: RED | Risk: 100 | Source: layer_2_ais
+[ssh-RESP] Thu Oct 22 16:52:56 2026 | State: RED | Risk: 100 | Method: observe | Blocks: 1 | Isolated: False | Source:
+layer_3_state
+[ssh-STATE] Thu Oct 22 16:52:59 2026 | State: RED | Risk: 100 | Source: layer_2_ais
+

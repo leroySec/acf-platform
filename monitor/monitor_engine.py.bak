@@ -1,0 +1,1552 @@
+#!/usr/bin/env python3
+"""
+monitor/monitor_engine.py — Layer 1 monitoring engine.
+
+FIX-1: normalize ts on every detection before emission.
+  - Firewall events carry date + time strings; converted to epoch ts.
+  - Eventlog events carry ISO timestamp string; converted to epoch ts.
+  - Sensor detections already carry numeric ts; unchanged.
+"""
+
+import os
+import sys
+import json
+import time
+import re
+import signal
+import hashlib
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from config import Config
+from platform_utils import acquire_lock, release_lock, get_temp_dir
+
+try:
+    from event_emit import emit
+except ImportError:
+    def emit(src, layer, level, msg):
+        ts = time.strftime("%H:%M:%S")
+        print(f"[{ts}][{src}][{layer}][{level.upper()}] {msg}")
+
+from monitor.reader_consumer import ReaderConsumer
+from monitor.decoder import Decoder
+from monitor.rule_matcher import RuleMatcher
+from monitor.emitter import Emitter
+
+SRC = "monitor_engine"
+LAYER = "layer1"
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SYSTEM_CONFIG_FILE = os.path.join(ROOT, "system_config.json")
+BLACKBOARD_FILE = Config.BLACKBOARD_FILE
+HEARTBEAT_FILE = os.path.join(get_temp_dir(), "acf_monitor_engine.heartbeat")
+
+BASE_CYCLE_SECONDS = 10
+MIN_CYCLE_SECONDS = 3
+MAX_CYCLE_SECONDS = 30
+READER_FRESH_SECONDS = 30
+MAX_READ_BYTES = 32 * 1024
+EVENTLOG_MAX_PER_CYCLE = 200
+MAX_ITEMS_PER_CYCLE = 200
+
+MAX_KNOWN_FILES_BUDGET = 150
+DISCOVERY_BUDGET = 50
+
+DEFAULT_FAILURE_PATTERNS = [
+    r"(?i)fail", r"(?i)error", r"(?i)denied", r"(?i)invalid",
+    r"(?i)rejected", r"(?i)attack", r"(?i)malware", r"(?i)virus",
+    r"(?i)unauthorized", r"(?i)authentication failure",
+]
+_COMPILED_DEFAULT = [re.compile(p) for p in DEFAULT_FAILURE_PATTERNS]
+
+try:
+    import win32evtlog
+    HAS_WIN32EVTLOG = True
+except ImportError:
+    HAS_WIN32EVTLOG = False
+
+try:
+    import psutil
+    HAS_PSUTIL = True
+except ImportError:
+    HAS_PSUTIL = False
+
+_running = True
+
+
+# ----------------------------------------------------------------------
+# FIX-1: timestamp normalization helpers
+# ----------------------------------------------------------------------
+def _parse_eventlog_ts(s):
+    """Parse an ISO 8601 timestamp string to epoch seconds."""
+    if not isinstance(s, str) or not s:
+        return None
+    try:
+        text = s
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        return datetime.fromisoformat(text).timestamp()
+    except Exception:
+        return None
+
+
+def _parse_firewall_ts(date_str, time_str):
+    """Parse firewall date and time strings to epoch seconds (local)."""
+    if not isinstance(date_str, str) or not isinstance(time_str, str):
+        return None
+    try:
+        dt = datetime.strptime(
+            f"{date_str} {time_str}", "%Y-%m-%d %H:%M:%S")
+        return dt.timestamp()
+    except Exception:
+        return None
+
+
+def _normalize_ts(rec):
+    """
+    Ensure the detection dict carries a numeric ts.
+    Order of preference:
+      rec["ts"]           already numeric -> kept
+      rec["timestamp"]    ISO 8601 string
+      rec["date"]+["time"] firewall local time
+    Returns the same dict, possibly modified in place.
+    """
+    if not isinstance(rec, dict):
+        return rec
+    existing = rec.get("ts")
+    if isinstance(existing, (int, float)) and not isinstance(existing, bool):
+        return rec
+    ts = _parse_eventlog_ts(rec.get("timestamp"))
+    if ts is None:
+        ts = _parse_firewall_ts(rec.get("date"), rec.get("time"))
+    if ts is not None:
+        rec["ts"] = ts
+    return rec
+
+
+# ----------------------------------------------------------------------
+# Blackboard — tri-state reads
+# ----------------------------------------------------------------------
+BB_OK = "ok"
+BB_EMPTY = "empty"
+BB_UNAVAILABLE = "unavailable"
+BB_CORRUPT = "corrupt"
+
+
+def _bb_read_state(section: str):
+    f = None
+    acquired = False
+    try:
+        f = open(BLACKBOARD_FILE, 'r')
+    except FileNotFoundError:
+        return BB_UNAVAILABLE, None, "file_missing"
+    except Exception as e:
+        return BB_UNAVAILABLE, None, f"open_failed:{type(e).__name__}"
+
+    try:
+        try:
+            acquire_lock(f.fileno(), exclusive=False)
+            acquired = True
+        except Exception as e:
+            return BB_UNAVAILABLE, None, f"lock_failed:{type(e).__name__}"
+
+        try:
+            data = json.load(f)
+        except json.JSONDecodeError:
+            return BB_CORRUPT, None, "json_decode_error"
+
+        if not isinstance(data, dict):
+            return BB_CORRUPT, None, "not_a_dict"
+
+        if section not in data:
+            return BB_EMPTY, {}, ""
+        sec = data.get(section)
+        if not isinstance(sec, dict):
+            return BB_CORRUPT, None, "section_not_dict"
+        return BB_OK, sec, ""
+    finally:
+        if acquired and f is not None:
+            try:
+                release_lock(f.fileno())
+            except Exception:
+                pass
+        if f is not None:
+            try:
+                f.close()
+            except Exception:
+                pass
+
+
+def _bb_read_section(section: str) -> Dict:
+    state, data, _ = _bb_read_state(section)
+    if state == BB_OK:
+        return data
+    if state == BB_EMPTY:
+        return {}
+    return {}
+
+
+def _bb_read_state_all():
+    f = None
+    acquired = False
+    try:
+        f = open(BLACKBOARD_FILE, 'r')
+    except FileNotFoundError:
+        return BB_UNAVAILABLE, None, "file_missing"
+    except Exception as e:
+        return BB_UNAVAILABLE, None, f"open_failed:{type(e).__name__}"
+    try:
+        try:
+            acquire_lock(f.fileno(), exclusive=False)
+            acquired = True
+        except Exception as e:
+            return BB_UNAVAILABLE, None, f"lock_failed:{type(e).__name__}"
+        try:
+            data = json.load(f)
+        except json.JSONDecodeError:
+            return BB_CORRUPT, None, "json_decode_error"
+        if not isinstance(data, dict):
+            return BB_CORRUPT, None, "not_a_dict"
+        return BB_OK, data, ""
+    finally:
+        if acquired and f is not None:
+            try:
+                release_lock(f.fileno())
+            except Exception:
+                pass
+        if f is not None:
+            try:
+                f.close()
+            except Exception:
+                pass
+
+
+def _bb_write_and_readback(section: str, updates: Dict):
+    f = None
+    acquired = False
+    try:
+        f = open(BLACKBOARD_FILE, 'r+')
+        acquire_lock(f.fileno(), exclusive=True)
+        acquired = True
+        try:
+            data = json.load(f)
+        except json.JSONDecodeError:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        if section not in data or not isinstance(data[section], dict):
+            data[section] = {}
+        data[section].update(updates)
+        f.seek(0)
+        json.dump(data, f, indent=2)
+        f.truncate()
+        try:
+            f.flush()
+            os.fsync(f.fileno())
+        except Exception:
+            pass
+        f.seek(0)
+        try:
+            on_disk = json.load(f)
+        except json.JSONDecodeError:
+            return False, None, "readback_json_decode_error"
+        readback = on_disk.get(section, {}) if isinstance(on_disk, dict) else {}
+        return True, readback, ""
+    except Exception as e:
+        return False, None, f"{type(e).__name__}:{e}"
+    finally:
+        if acquired and f is not None:
+            try:
+                release_lock(f.fileno())
+            except Exception as e:
+                emit(SRC, LAYER, "warn",
+                     f"release_lock failed: {type(e).__name__}")
+        if f is not None:
+            try:
+                f.close()
+            except Exception:
+                pass
+
+
+def _verify_lock_compatibility() -> Tuple[bool, str]:
+    try:
+        if not os.path.exists(BLACKBOARD_FILE):
+            return False, "blackboard_missing"
+
+        f_ex = open(BLACKBOARD_FILE, 'r')
+        f_sh = open(BLACKBOARD_FILE, 'r')
+        shared_ok = False
+        try:
+            acquire_lock(f_ex.fileno(), exclusive=True)
+            try:
+                acquire_lock(f_sh.fileno(), exclusive=False)
+                shared_ok = True
+            except Exception:
+                shared_ok = False
+            finally:
+                if shared_ok:
+                    try:
+                        release_lock(f_sh.fileno())
+                    except Exception:
+                        pass
+                try:
+                    release_lock(f_ex.fileno())
+                except Exception:
+                    pass
+        finally:
+            f_ex.close()
+            f_sh.close()
+
+        if shared_ok:
+            return False, "shared_acquires_while_exclusive_held"
+
+        f_sh2 = open(BLACKBOARD_FILE, 'r')
+        f_ex2 = open(BLACKBOARD_FILE, 'r')
+        exclusive_ok = False
+        try:
+            acquire_lock(f_sh2.fileno(), exclusive=False)
+            try:
+                acquire_lock(f_ex2.fileno(), exclusive=True)
+                exclusive_ok = True
+            except Exception:
+                exclusive_ok = False
+            finally:
+                if exclusive_ok:
+                    try:
+                        release_lock(f_ex2.fileno())
+                    except Exception:
+                        pass
+                try:
+                    release_lock(f_sh2.fileno())
+                except Exception:
+                    pass
+        finally:
+            f_sh2.close()
+            f_ex2.close()
+
+        if exclusive_ok:
+            return False, "exclusive_acquires_while_shared_held"
+
+        return True, "ok"
+    except Exception as e:
+        return False, f"lock_check_exception:{type(e).__name__}"
+
+
+# ----------------------------------------------------------------------
+# Config helpers
+# ----------------------------------------------------------------------
+def load_config() -> Dict:
+    try:
+        with open(SYSTEM_CONFIG_FILE, 'r') as f:
+            return json.load(f)
+    except Exception as e:
+        emit(SRC, LAYER, "error", f"config load failed: {e}")
+        return {}
+
+
+def _read_disabled_map() -> Dict[str, List[str]]:
+    state, data, _ = _bb_read_state_all()
+    if state != BB_OK:
+        return {}
+    disabled = data.get("disabled_capabilities", {})
+    if isinstance(disabled, list):
+        return {cap: ["*"] for cap in disabled}
+    if isinstance(disabled, dict):
+        out = {}
+        for cap, layers in disabled.items():
+            if isinstance(layers, list):
+                out[cap] = layers
+            elif layers is True:
+                out[cap] = ["*"]
+        return out
+    return {}
+
+
+def _pair_disabled(disabled_map, capability, layer) -> bool:
+    entry = disabled_map.get(capability)
+    if not entry:
+        return False
+    if "*" in entry:
+        return True
+    return layer in entry
+
+
+def _capabilities_for_layer(config: Dict, layer: str) -> List[str]:
+    cl = config.get("capability_layers", {})
+    if not isinstance(cl, dict):
+        return []
+    return [name for name, layers in cl.items()
+            if isinstance(layers, list) and layer in layers]
+
+
+def _capability_path(config: Dict, name: str) -> Optional[str]:
+    paths = config.get("capability_paths", {})
+    if not isinstance(paths, dict):
+        return None
+    if name in paths:
+        return paths[name]
+    custom = paths.get("custom", {})
+    if isinstance(custom, dict) and name in custom:
+        return custom[name]
+    return None
+
+
+def _capability_rules(config: Dict, name: str) -> Dict:
+    rules = config.get("capability_rules", {})
+    if isinstance(rules, dict) and name in rules \
+            and isinstance(rules[name], dict):
+        return rules[name]
+    return {}
+
+
+def _make_event(ts, source, cls, severity, detail, raw, src_ip=None):
+    return {
+        "ts": ts, "source": source, "class": cls,
+        "severity": severity,
+        "src_ip": src_ip or "0.0.0.0",
+        "detail": detail[:500],
+        "raw": raw[:1000],
+    }
+
+
+def _apply_rules_fallback(items, rules):
+    compiled = []
+    for p in rules.get("patterns", []) or []:
+        try:
+            compiled.append(re.compile(p))
+        except re.error:
+            continue
+    if not compiled:
+        compiled = _COMPILED_DEFAULT
+    detections = []
+    for line in items:
+        if not isinstance(line, str):
+            continue
+        for p in compiled:
+            if p.search(line):
+                detections.append({"raw": line, "src_ip": None,
+                                   "matched_by": "fallback_pattern"})
+                break
+    return detections[:MAX_ITEMS_PER_CYCLE]
+
+
+# ----------------------------------------------------------------------
+# Collectors
+# ----------------------------------------------------------------------
+class Collector:
+    kind = "base"
+    last_healthy = True
+    last_reason = ""
+
+    def __init__(self, name, path, rules):
+        self.name = name
+        self.path = path
+        self.rules = rules
+
+    def load_state(self, state): pass
+    def save_state(self): return {}
+    def collect(self): raise NotImplementedError
+
+
+class FileCollector(Collector):
+    kind = "file"
+
+    def __init__(self, name, path, rules):
+        super().__init__(name, path, rules)
+        self._last_identity = None
+        self._last_pos = 0
+        self._partial = b""
+
+    def load_state(self, state):
+        if not isinstance(state, dict):
+            return
+        ident = state.get("identity")
+        pos = state.get("position")
+        partial = state.get("partial")
+        if isinstance(ident, str) and ident:
+            self._last_identity = ident
+        if isinstance(pos, int) and pos >= 0:
+            self._last_pos = pos
+        if isinstance(partial, str):
+            try:
+                self._partial = partial.encode("utf-8",
+                                                errors="surrogateescape")
+            except Exception:
+                self._partial = b""
+
+    def save_state(self):
+        try:
+            partial_text = self._partial.decode("utf-8",
+                                                 errors="surrogateescape")
+        except Exception:
+            partial_text = ""
+        return {
+            "identity": self._last_identity,
+            "position": self._last_pos,
+            "partial": partial_text,
+        }
+
+    def _identity(self, st):
+        ino = getattr(st, "st_ino", 0) or 0
+        dev = getattr(st, "st_dev", 0) or 0
+        if ino > 0:
+            return f"i:{dev}:{ino}"
+        return f"ms:{st.st_mtime}:{st.st_size}"
+
+    def collect(self):
+        lines = []
+        if not self.path or not os.path.isfile(self.path):
+            self.last_healthy = False
+            self.last_reason = "file_missing"
+            return lines
+        try:
+            with open(self.path, 'rb') as f:
+                st = os.fstat(f.fileno())
+                ident = self._identity(st)
+                size = st.st_size
+
+                if self._last_identity is None:
+                    self._last_identity = ident
+                elif self._last_identity != ident:
+                    self._last_pos = 0
+                    self._partial = b""
+                    self._last_identity = ident
+                if size < self._last_pos:
+                    self._last_pos = 0
+                    self._partial = b""
+
+                f.seek(self._last_pos)
+                chunk = f.read(MAX_READ_BYTES)
+                self._last_pos += len(chunk)
+        except Exception as e:
+            self.last_healthy = False
+            self.last_reason = f"open_failed:{type(e).__name__}"
+            return lines
+
+        data = self._partial + chunk
+        idx = data.rfind(b'\n')
+        if idx == -1:
+            idx = data.rfind(b'\r')
+        if idx == -1:
+            if len(data) >= MAX_READ_BYTES:
+                keep = data[-MAX_READ_BYTES:]
+                drop = data[:-MAX_READ_BYTES]
+                self._partial = keep
+                if drop.strip():
+                    try:
+                        text = drop.decode("utf-8", errors="replace")
+                        for line in text.splitlines():
+                            if line.strip():
+                                lines.append(line)
+                    except Exception:
+                        pass
+            else:
+                self._partial = data
+            self.last_healthy = True
+            self.last_reason = ""
+            return lines
+
+        complete = data[:idx + 1]
+        self._partial = data[idx + 1:]
+        text = complete.decode("utf-8", errors="replace")
+        for line in text.splitlines():
+            if line.strip():
+                lines.append(line)
+        self.last_healthy = True
+        self.last_reason = ""
+        return lines
+
+
+class EventLogCollector(Collector):
+    kind = "eventlog"
+
+    def __init__(self, name, log_name, rules):
+        super().__init__(name, None, rules)
+        self.log_name = log_name or "Security"
+        self._bookmark_xml = None
+        self._event_ids = rules.get("event_ids", []) or []
+
+    def load_state(self, state):
+        if not isinstance(state, dict):
+            return
+        bm = state.get("bookmark_xml")
+        if isinstance(bm, str) and bm:
+            self._bookmark_xml = bm
+
+    def save_state(self):
+        return {"bookmark_xml": self._bookmark_xml}
+
+    def _build_query(self):
+        if not self._event_ids:
+            return "*"
+        parts = " or ".join(f"EventID={eid}" for eid in self._event_ids)
+        return f"*[System[({parts})]]"
+
+    def collect(self):
+        if not HAS_WIN32EVTLOG:
+            self.last_healthy = False
+            self.last_reason = "win32evtlog_missing"
+            return []
+        # Return empty; the reader owns eventlog sources.
+        self.last_healthy = True
+        self.last_reason = ""
+        return []
+
+
+class MetricsCollector(Collector):
+    kind = "metrics"
+    HASH_READ_BYTES = 1024 * 1024
+
+    WL_VALID = "whitelist_valid"
+    WL_EMPTY = "whitelist_empty"
+    WL_UNAVAILABLE = "whitelist_unavailable"
+    WL_INVALID = "whitelist_invalid"
+
+    def __init__(self, name, rules):
+        super().__init__(name, None, rules)
+        self._last_processes = set()
+        self._cpu_warmed_up = False
+        self.last_detail = {}
+        self._baseline_cpu = 0.0
+        self._baseline_memory = 0.0
+        self._file_hashes = {}
+        self._watch_paths = self._resolve_watch_paths(rules)
+        self._files_initialized = False
+        self._files_truncated = False
+        self._whitelist_cache = []
+        self._whitelist_mtime = 0.0
+        self._whitelist_bad = 0
+        self._whitelist_state = self.WL_UNAVAILABLE
+        self._whitelist_path = getattr(Config, "WHITELIST_FILE", None)
+
+    @staticmethod
+    def _resolve_watch_paths(rules):
+        raw = rules.get("watch_paths")
+        if not isinstance(raw, list):
+            return []
+        return [p for p in raw
+                if isinstance(p, str) and p and os.path.isdir(p)]
+
+    def _hash_file(self, path):
+        try:
+            with open(path, "rb") as f:
+                return hashlib.sha256(
+                    f.read(self.HASH_READ_BYTES)).hexdigest()
+        except Exception:
+            return ""
+
+    def _initialize_file_hashes(self):
+        hashes = {}
+        budget = MAX_KNOWN_FILES_BUDGET
+        truncated = False
+        for base in self._watch_paths:
+            if truncated:
+                break
+            try:
+                for root, _d, files in os.walk(base):
+                    for name in files:
+                        full = os.path.join(root, name)
+                        try:
+                            if not os.path.isfile(full) \
+                                    or os.path.islink(full):
+                                continue
+                            if budget <= 0:
+                                truncated = True
+                                break
+                            hashes[full] = self._hash_file(full)
+                            budget -= 1
+                        except Exception:
+                            continue
+                    if truncated:
+                        break
+            except Exception:
+                continue
+        self._file_hashes = hashes
+        self._files_initialized = True
+        self._files_truncated = truncated
+
+    def _check_file_changes(self):
+        if not self._watch_paths:
+            return 0
+        if not self._files_initialized:
+            self._initialize_file_hashes()
+            return 0
+        changes = 0
+        budget = MAX_KNOWN_FILES_BUDGET
+        for path in list(self._file_hashes.keys()):
+            if budget <= 0:
+                break
+            budget -= 1
+            if not os.path.exists(path):
+                changes += 1
+                del self._file_hashes[path]
+                continue
+            try:
+                h = self._hash_file(path)
+                if h and h != self._file_hashes[path]:
+                    changes += 1
+                    self._file_hashes[path] = h
+            except Exception:
+                continue
+        disc_complete = True
+        if self._files_truncated \
+                or len(self._file_hashes) < MAX_KNOWN_FILES_BUDGET:
+            db = DISCOVERY_BUDGET
+            for base in self._watch_paths:
+                if db <= 0:
+                    disc_complete = False
+                    break
+                try:
+                    for root, _d, files in os.walk(base):
+                        if db <= 0:
+                            disc_complete = False
+                            break
+                        for name in files:
+                            if db <= 0:
+                                disc_complete = False
+                                break
+                            full = os.path.join(root, name)
+                            if full in self._file_hashes:
+                                continue
+                            try:
+                                if not os.path.isfile(full) \
+                                        or os.path.islink(full):
+                                    continue
+                                self._file_hashes[full] = \
+                                    self._hash_file(full)
+                                db -= 1
+                            except Exception:
+                                continue
+                except Exception:
+                    continue
+        if disc_complete:
+            self._files_truncated = False
+        return changes
+
+    def _reload_whitelist(self):
+        if self._whitelist_path is None:
+            self._whitelist_state = self.WL_UNAVAILABLE
+            return
+        try:
+            mtime = os.path.getmtime(self._whitelist_path)
+        except OSError:
+            self._whitelist_state = self.WL_UNAVAILABLE
+            self._whitelist_cache = []
+            return
+        if mtime == self._whitelist_mtime:
+            return
+        try:
+            with open(self._whitelist_path, "r") as f:
+                data = json.load(f)
+        except Exception:
+            self._whitelist_state = self.WL_INVALID
+            self._whitelist_cache = []
+            return
+        if not isinstance(data, list):
+            self._whitelist_state = self.WL_INVALID
+            self._whitelist_cache = []
+            return
+        clean = []
+        bad = 0
+        for entry in data:
+            if not isinstance(entry, dict):
+                bad += 1
+                continue
+            ip = entry.get("ip")
+            if not isinstance(ip, str):
+                bad += 1
+                continue
+            exp = entry.get("expiry", 0)
+            try:
+                exp_f = float(exp) if exp else 0.0
+            except (TypeError, ValueError):
+                bad += 1
+                continue
+            clean.append({"ip": ip, "expiry": exp_f})
+        self._whitelist_cache = clean
+        self._whitelist_bad = bad
+        self._whitelist_mtime = mtime
+        self._whitelist_state = self.WL_VALID if clean else self.WL_EMPTY
+
+    def _endpoint_trusted(self, ip, port, process_name):
+        if not ip:
+            return True
+        if ip.startswith(("10.", "192.168.", "172.")) \
+                or ip in ("127.0.0.1", "0.0.0.0"):
+            return True
+        now = time.time()
+        for entry in self._whitelist_cache:
+            if entry.get("ip") == ip and entry.get("expiry", 0) > now:
+                return True
+        return False
+
+    def collect(self):
+        events = []
+        self.last_healthy = True
+        self.last_reason = ""
+
+        if self._whitelist_path is None:
+            self.last_healthy = False
+            self.last_reason = "whitelist_config_missing"
+            self._whitelist_state = self.WL_UNAVAILABLE
+
+        detail = {
+            "active_connections": 0,
+            "unknown_connection_count": 0,
+            "process_count": 0,
+            "new_process_count": 0,
+            "file_change_count": 0,
+            "cpu_percent": 0.0,
+            "memory_percent": 0.0,
+            "load_avg_1min": None,
+            "load_avg_available": False,
+            "cpu_spike_detected": False,
+            "memory_spike_detected": False,
+            "method": "unavailable",
+            "whitelist_malformed": self._whitelist_bad,
+            "whitelist_state": self._whitelist_state,
+        }
+
+        if not HAS_PSUTIL:
+            self.last_healthy = False
+            self.last_reason = "psutil_missing"
+            self.last_detail = detail
+            return events
+
+        try:
+            detail["method"] = "psutil"
+            self._reload_whitelist()
+            detail["whitelist_state"] = self._whitelist_state
+            detail["whitelist_malformed"] = self._whitelist_bad
+
+            if self._whitelist_state == self.WL_INVALID:
+                self.last_healthy = False
+                self.last_reason = "whitelist_invalid"
+
+            active = 0
+            unknown = 0
+            for c in psutil.net_connections(kind="inet"):
+                if c.status not in ("ESTABLISHED", "SYN_SENT", "SYN_RECV"):
+                    continue
+                if not c.raddr:
+                    continue
+                ip, port = c.raddr
+                if ip in ("127.0.0.1", "0.0.0.0"):
+                    continue
+                active += 1
+                if not self._endpoint_trusted(ip, port, None):
+                    unknown += 1
+            detail["active_connections"] = active
+            detail["unknown_connection_count"] = unknown
+
+            procs = set()
+            for p in psutil.process_iter(["name"]):
+                try:
+                    n = p.info.get("name")
+                    if n:
+                        procs.add(n.lower())
+                except Exception:
+                    continue
+            detail["process_count"] = len(procs)
+            detail["new_process_count"] = (
+                len(procs - self._last_processes)
+                if self._last_processes else 0)
+            self._last_processes = procs
+
+            if not self._cpu_warmed_up:
+                sample = psutil.cpu_percent(interval=0.1)
+                self._cpu_warmed_up = True
+            else:
+                sample = psutil.cpu_percent(interval=None)
+            detail["cpu_percent"] = sample
+            detail["memory_percent"] = psutil.virtual_memory().percent
+
+            try:
+                if os.name == "nt":
+                    detail["load_avg_1min"] = None
+                    detail["load_avg_available"] = False
+                else:
+                    detail["load_avg_1min"] = float(psutil.getloadavg()[0])
+                    detail["load_avg_available"] = True
+            except (AttributeError, OSError):
+                detail["load_avg_1min"] = None
+                detail["load_avg_available"] = False
+
+            thresholds = self.rules.get("thresholds", {}) or {}
+            try:
+                cpu_thr = float(thresholds.get("cpu_spike", 70))
+                cpu_mult = float(thresholds.get("cpu_multiplier", 1.5))
+                mem_thr = float(thresholds.get("memory_spike", 80))
+                mem_mult = float(thresholds.get("memory_multiplier", 1.5))
+            except (TypeError, ValueError):
+                cpu_thr, cpu_mult, mem_thr, mem_mult = 70.0, 1.5, 80.0, 1.5
+
+            cpu_spike = (
+                detail["cpu_percent"] > cpu_thr
+                and (self._baseline_cpu == 0.0
+                     or detail["cpu_percent"] > self._baseline_cpu * cpu_mult)
+            )
+            mem_spike = (
+                detail["memory_percent"] > mem_thr
+                and (self._baseline_memory == 0.0
+                     or detail["memory_percent"]
+                     > self._baseline_memory * mem_mult)
+            )
+            detail["cpu_spike_detected"] = bool(cpu_spike)
+            detail["memory_spike_detected"] = bool(mem_spike)
+
+            if self._baseline_cpu == 0.0:
+                self._baseline_cpu = detail["cpu_percent"]
+            else:
+                self._baseline_cpu = (self._baseline_cpu * 0.9
+                                      + detail["cpu_percent"] * 0.1)
+            if self._baseline_memory == 0.0:
+                self._baseline_memory = detail["memory_percent"]
+            else:
+                self._baseline_memory = (self._baseline_memory * 0.9
+                                         + detail["memory_percent"] * 0.1)
+
+            detail["file_change_count"] = self._check_file_changes()
+
+            if cpu_spike:
+                events.append(_make_event(
+                    ts=time.time(), source=self.name,
+                    cls="observation", severity="high",
+                    detail=f"cpu_spike cpu={detail['cpu_percent']:.1f}%",
+                    raw=f"cpu_percent={detail['cpu_percent']:.1f}"))
+            if mem_spike:
+                events.append(_make_event(
+                    ts=time.time(), source=self.name,
+                    cls="observation", severity="high",
+                    detail=f"memory_spike "
+                           f"mem={detail['memory_percent']:.1f}%",
+                    raw=f"memory_percent={detail['memory_percent']:.1f}"))
+            if detail["new_process_count"] > 0:
+                events.append(_make_event(
+                    ts=time.time(), source=self.name,
+                    cls="observation", severity="low",
+                    detail=f"{detail['new_process_count']} new processes",
+                    raw=f"new_process_count={detail['new_process_count']}"))
+            if detail["unknown_connection_count"] > 0:
+                events.append(_make_event(
+                    ts=time.time(), source=self.name,
+                    cls="observation", severity="high",
+                    detail=f"{detail['unknown_connection_count']} "
+                           f"untrusted connections",
+                    raw=f"unknown={detail['unknown_connection_count']}"))
+        except Exception as e:
+            self.last_healthy = False
+            self.last_reason = f"metrics_exception:{type(e).__name__}"
+
+        self.last_detail = detail
+        return events
+
+
+# ----------------------------------------------------------------------
+# CapabilityWorker
+# ----------------------------------------------------------------------
+SOURCE_READER_OWNED = "reader_owned"
+SOURCE_DIRECT_OWNED = "direct_owned"
+SOURCE_UNAVAILABLE = "unavailable"
+
+
+class CapabilityWorker:
+    def __init__(self, name, path, rules, disabled_map):
+        self.name = name
+        self.path = path
+        self.rules = rules if isinstance(rules, dict) else {}
+        self.disabled_map = disabled_map
+        self.section = f"layer_1_monitor_{name}"
+        self.reader_section = f"reader_{name}"
+        self.cumulative = 0
+        self._path_was_missing = False
+        self.last_attacker_ip = "0.0.0.0"
+
+        declared = self.rules.get("type")
+        if declared == "metrics":
+            self.collector = MetricsCollector(self.name, self.rules)
+        elif declared == "eventlog":
+            self.collector = EventLogCollector(
+                self.name, self.rules.get("log_name", "Security"),
+                self.rules)
+        elif declared == "file":
+            self.collector = FileCollector(self.name, self.path, self.rules)
+        elif self.name == "sensor":
+            self.collector = MetricsCollector(self.name, self.rules)
+        elif os.name == 'nt' and self.name == "ssh":
+            self.collector = EventLogCollector(
+                self.name, "Security", self.rules)
+        elif self.path and os.path.isfile(self.path):
+            self.collector = FileCollector(self.name, self.path, self.rules)
+        else:
+            self.collector = FileCollector(self.name, self.path, self.rules)
+
+        fresh = getattr(Config, "READER_FRESH_SECONDS", READER_FRESH_SECONDS)
+        self.reader_consumer = ReaderConsumer(
+            self.name, self.reader_section, fresh)
+        decoder_declared = "decoder" in self.rules
+        decoder_xml = self.rules.get("decoder", "") or ""
+        self.decoder = Decoder(self.name, decoder_xml,
+                               declared=decoder_declared)
+        rule_list = self.rules.get("rules", []) or []
+        self.rule_matcher = RuleMatcher(self.name, rule_list)
+        self.emitter = Emitter(
+            self.name, self.section,
+            getattr(Config, "SCHEMA_VERSION", "unknown"))
+        self._load_persisted_state()
+
+    def _load_persisted_state(self):
+        state, section, _ = _bb_read_state(self.section)
+        if state not in (BB_OK, BB_EMPTY):
+            return
+        if not isinstance(section, dict):
+            section = {}
+        coll_state = section.get("_collector_state", {})
+        try:
+            self.collector.load_state(coll_state)
+        except Exception:
+            pass
+        v = section.get("last_failures_cumulative", 0)
+        if isinstance(v, bool) or not isinstance(v, int):
+            v = 0
+        self.cumulative = v
+        ip = section.get("last_attacker_ip")
+        if isinstance(ip, str) and ip:
+            self.last_attacker_ip = ip
+
+    def _source_ownership(self):
+        if isinstance(self.collector, MetricsCollector):
+            return SOURCE_DIRECT_OWNED, ""
+        state, section, reason = _bb_read_state(self.reader_section)
+        if state in (BB_UNAVAILABLE, BB_CORRUPT):
+            return SOURCE_UNAVAILABLE, reason
+        if state == BB_EMPTY:
+            return SOURCE_DIRECT_OWNED, ""
+        owner = section.get("reader_owner", "")
+        if not isinstance(owner, str) or not owner:
+            return SOURCE_DIRECT_OWNED, ""
+        if section.get("reader_ready") is not True:
+            return SOURCE_DIRECT_OWNED, ""
+        ts = section.get("reading_timestamp", 0)
+        if isinstance(ts, bool) or not isinstance(ts, (int, float)):
+            return SOURCE_DIRECT_OWNED, ""
+        if ts <= 0:
+            return SOURCE_DIRECT_OWNED, ""
+        return SOURCE_READER_OWNED, ""
+
+    def run_cycle(self):
+        if _pair_disabled(self.disabled_map, self.name, "layer1"):
+            return
+        if isinstance(self.collector, MetricsCollector):
+            return self._run_sensor_cycle()
+        ownership, reason = self._source_ownership()
+        if ownership == SOURCE_UNAVAILABLE:
+            self._emit_cycle(
+                decoded_items=[], qualifying=[],
+                healthy=False,
+                reason=f"source_ownership_unknown:{reason}",
+                source_type="unknown",
+                detail={"ownership": "unavailable", "reason": reason})
+            return
+        if ownership == SOURCE_READER_OWNED:
+            return self._run_reader_cycle()
+        return self._run_direct_cycle()
+
+    def _emit_cycle(self, decoded_items, qualifying, healthy, reason,
+                     source_type, detail=None, attacker_ip=None,
+                     extra_state=None):
+        if attacker_ip is None:
+            attacker_ip = self.last_attacker_ip
+        new_cum, err = self.emitter.emit(
+            _bb_write_and_readback, time.time(),
+            decoded_items=decoded_items,
+            qualifying_records=qualifying,
+            cumulative_before=self.cumulative,
+            monitor_healthy=healthy,
+            reason=reason,
+            source_type=source_type,
+            detail=detail,
+            attacker_ip=attacker_ip,
+            extra_state=extra_state,
+        )
+        if err:
+            emit(self.name, LAYER, "error",
+                 f"emitter failed: {err}")
+            return False
+        self.cumulative = new_cum
+        return True
+
+    def _run_reader_cycle(self):
+        now = time.time()
+        items, source_type, reason = self.reader_consumer.consume(
+            _bb_read_section, now)
+        if reason:
+            self._emit_cycle(
+                decoded_items=[], qualifying=[],
+                healthy=False,
+                reason=reason,
+                source_type=source_type or "",
+                detail={"input_source": "reader", "error": reason})
+            return
+
+        # Eventlog path: structured records; bypass decoder.
+        if source_type == "eventlog":
+            qualifying = []
+            match_reasons = {}
+            for rec in items:
+                if not isinstance(rec, dict):
+                    continue
+                ok, m_reason = self.rule_matcher.match(rec)
+                if ok:
+                    qualifying.append(rec)
+                elif m_reason:
+                    match_reasons[m_reason] = \
+                        match_reasons.get(m_reason, 0) + 1
+            unhealthy_reason = self._aggregate_reason({}, match_reasons)
+
+            # FIX-1: normalize ts on every detection before emitting.
+            for rec in qualifying:
+                _normalize_ts(rec)
+
+            attacker_ip = self._attacker_from_dets(qualifying)
+            if attacker_ip == "0.0.0.0":
+                attacker_ip = self.last_attacker_ip
+            else:
+                self.last_attacker_ip = attacker_ip
+            self._emit_cycle(
+                decoded_items=items,
+                qualifying=qualifying,
+                healthy=(unhealthy_reason == ""),
+                reason=unhealthy_reason,
+                source_type="eventlog",
+                detail={"input_source": "reader",
+                        "input_kind": "eventlog",
+                        "items_in": len(items),
+                        "detections": len(qualifying),
+                        "match_reasons": dict(match_reasons)},
+                attacker_ip=attacker_ip,
+                extra_state=self._safe_state())
+            return
+
+        # File path: decode then match.
+        decoder_ok, decoder_reason = self.decoder.ready()
+        if not decoder_ok:
+            detections = _apply_rules_fallback(items, self.rules)
+            # FIX-1: normalize ts on fallback detections too.
+            for rec in detections:
+                _normalize_ts(rec)
+            if detections:
+                attacker_ip = self._attacker_from_dets(detections)
+                if attacker_ip == "0.0.0.0":
+                    attacker_ip = self.last_attacker_ip
+                else:
+                    self.last_attacker_ip = attacker_ip
+                self._emit_cycle(
+                    decoded_items=items, qualifying=detections,
+                    healthy=True, reason="",
+                    source_type="file",
+                    detail={"input_source": "reader",
+                            "input_kind": "file",
+                            "decoder": decoder_reason,
+                            "fallback": "applied"},
+                    attacker_ip=attacker_ip,
+                    extra_state=self._safe_state())
+                return
+            if self.decoder.declared:
+                self._emit_cycle(
+                    decoded_items=items, qualifying=[],
+                    healthy=False,
+                    reason=f"decoder:{decoder_reason}",
+                    source_type="file",
+                    detail={"input_source": "reader",
+                            "input_kind": "file",
+                            "decoder": decoder_reason},
+                    extra_state=self._safe_state())
+            else:
+                self._emit_cycle(
+                    decoded_items=items, qualifying=[],
+                    healthy=True, reason="",
+                    source_type="file",
+                    detail={"input_source": "reader",
+                            "input_kind": "file",
+                            "decoder": decoder_reason},
+                    extra_state=self._safe_state())
+            return
+
+        decoded = []
+        decode_failures = {}
+        for item in items:
+            rec, dr = self.decoder.decode(item)
+            if rec is not None:
+                decoded.append(rec)
+            elif dr in ("prematch_miss", "regex_miss",
+                        "regex_miss_truncated"):
+                pass
+            else:
+                decode_failures[dr] = decode_failures.get(dr, 0) + 1
+
+        qualifying = []
+        match_reasons = {}
+        for rec in decoded:
+            ok, m_reason = self.rule_matcher.match(rec)
+            if ok:
+                qualifying.append(rec)
+            elif m_reason:
+                match_reasons[m_reason] = \
+                    match_reasons.get(m_reason, 0) + 1
+
+        unhealthy_reason = self._aggregate_reason(
+            decode_failures, match_reasons)
+
+        # FIX-1: normalize ts on every detection before emitting.
+        for rec in qualifying:
+            _normalize_ts(rec)
+
+        attacker_ip = self._attacker_from_dets(qualifying)
+        if attacker_ip == "0.0.0.0":
+            attacker_ip = self.last_attacker_ip
+        else:
+            self.last_attacker_ip = attacker_ip
+        self._emit_cycle(
+            decoded_items=items, qualifying=qualifying,
+            healthy=(unhealthy_reason == ""),
+            reason=unhealthy_reason,
+            source_type="file",
+            detail={"input_source": "reader", "input_kind": "file",
+                    "items_in": len(items),
+                    "decoded": len(decoded),
+                    "detections": len(qualifying),
+                    "decode_failures": dict(decode_failures),
+                    "match_reasons": dict(match_reasons)},
+            attacker_ip=attacker_ip,
+            extra_state=self._safe_state())
+
+    def _run_direct_cycle(self):
+        now = time.time()
+        self._check_path()
+        try:
+            raw_items = self.collector.collect()
+        except Exception:
+            raw_items = []
+        if not isinstance(raw_items, list):
+            raw_items = []
+        if len(raw_items) > MAX_ITEMS_PER_CYCLE:
+            raw_items = raw_items[:MAX_ITEMS_PER_CYCLE]
+
+        ch = getattr(self.collector, "last_healthy", True)
+        cr = getattr(self.collector, "last_reason", "")
+
+        # Eventlog: collector already produced structured records.
+        if isinstance(self.collector, EventLogCollector):
+            qualifying = []
+            match_reasons = {}
+            for rec in raw_items:
+                if not isinstance(rec, dict):
+                    continue
+                ok, m_reason = self.rule_matcher.match(rec)
+                if ok:
+                    qualifying.append(rec)
+                elif m_reason:
+                    match_reasons[m_reason] = \
+                        match_reasons.get(m_reason, 0) + 1
+
+            # FIX-1: normalize ts on every detection before emitting.
+            for rec in qualifying:
+                _normalize_ts(rec)
+
+            unhealthy_reason = ""
+            if not ch:
+                unhealthy_reason = cr
+            elif match_reasons:
+                unhealthy_reason = next(iter(match_reasons))
+            attacker_ip = self._attacker_from_dets(qualifying)
+            if attacker_ip == "0.0.0.0":
+                attacker_ip = self.last_attacker_ip
+            else:
+                self.last_attacker_ip = attacker_ip
+            self._emit_cycle(
+                decoded_items=raw_items, qualifying=qualifying,
+                healthy=(unhealthy_reason == ""),
+                reason=unhealthy_reason,
+                source_type="eventlog",
+                detail={"input_source": "direct",
+                        "input_kind": "eventlog",
+                        "items_in": len(raw_items),
+                        "detections": len(qualifying),
+                        "match_reasons": dict(match_reasons),
+                        "collector_healthy": ch,
+                        "collector_reason": cr},
+                attacker_ip=attacker_ip,
+                extra_state=self._safe_state())
+            return
+
+        # File path: fallback vs decode.
+        decoder_ok, decoder_reason = self.decoder.ready()
+        if not decoder_ok:
+            detections = _apply_rules_fallback(raw_items, self.rules)
+            # FIX-1: normalize ts on fallback detections.
+            for rec in detections:
+                _normalize_ts(rec)
+            attacker_ip = self._attacker_from_dets(detections)
+            if attacker_ip == "0.0.0.0":
+                attacker_ip = self.last_attacker_ip
+            else:
+                self.last_attacker_ip = attacker_ip
+            if self.decoder.declared and not detections:
+                healthy = False
+                reason = f"decoder:{decoder_reason}"
+            else:
+                healthy = ch
+                reason = "" if healthy else cr
+            self._emit_cycle(
+                decoded_items=raw_items, qualifying=detections,
+                healthy=healthy, reason=reason,
+                source_type="file",
+                detail={"input_source": "direct",
+                        "input_kind": "file",
+                        "decoder": decoder_reason,
+                        "decoder_declared": self.decoder.declared,
+                        "fallback": "applied",
+                        "collector_healthy": ch,
+                        "collector_reason": cr},
+                attacker_ip=attacker_ip,
+                extra_state=self._safe_state())
+            return
+
+        decoded = []
+        decode_failures = {}
+        for item in raw_items:
+            rec, dr = self.decoder.decode(item)
+            if rec is not None:
+                decoded.append(rec)
+            elif dr in ("prematch_miss", "regex_miss",
+                        "regex_miss_truncated"):
+                pass
+            else:
+                decode_failures[dr] = decode_failures.get(dr, 0) + 1
+
+        qualifying = []
+        match_reasons = {}
+        for rec in decoded:
+            ok, m_reason = self.rule_matcher.match(rec)
+            if ok:
+                qualifying.append(rec)
+            elif m_reason:
+                match_reasons[m_reason] = \
+                    match_reasons.get(m_reason, 0) + 1
+
+        unhealthy_reason = self._aggregate_reason(
+            decode_failures, match_reasons)
+        if not ch and not unhealthy_reason:
+            unhealthy_reason = cr
+
+        # FIX-1: normalize ts on every detection before emitting.
+        for rec in qualifying:
+            _normalize_ts(rec)
+
+        attacker_ip = self._attacker_from_dets(qualifying)
+        if attacker_ip == "0.0.0.0":
+            attacker_ip = self.last_attacker_ip
+        else:
+            self.last_attacker_ip = attacker_ip
+        self._emit_cycle(
+            decoded_items=raw_items, qualifying=qualifying,
+            healthy=(unhealthy_reason == ""),
+            reason=unhealthy_reason,
+            source_type="file",
+            detail={"input_source": "direct", "input_kind": "file",
+                    "items_in": len(raw_items),
+                    "decoded": len(decoded),
+                    "detections": len(qualifying),
+                    "decode_failures": dict(decode_failures),
+                    "match_reasons": dict(match_reasons),
+                    "collector_healthy": ch,
+                    "collector_reason": cr},
+            attacker_ip=attacker_ip,
+            extra_state=self._safe_state())
+
+    def _run_sensor_cycle(self):
+        now = time.time()
+        self._check_path()
+        try:
+            events = self.collector.collect()
+        except Exception:
+            events = []
+        if not isinstance(events, list):
+            events = []
+        if len(events) > MAX_ITEMS_PER_CYCLE:
+            events = events[:MAX_ITEMS_PER_CYCLE]
+
+        detections = [e for e in events if isinstance(e, dict)]
+        ch = getattr(self.collector, "last_healthy", True)
+        cr = getattr(self.collector, "last_reason", "")
+        detail = {"source_class": self.collector.kind,
+                  "path": self.path,
+                  "detail_source": "collector"}
+        detail.update(getattr(self.collector, "last_detail", {}) or {})
+        detail["collector_healthy"] = ch
+        detail["collector_reason"] = cr
+        reason = "" if ch else cr
+        self._emit_cycle(
+            decoded_items=events, qualifying=detections,
+            healthy=ch, reason=reason, source_type="metrics",
+            detail=detail, attacker_ip=self.last_attacker_ip,
+            extra_state=self._safe_state())
+
+    def _attacker_from_dets(self, dets):
+        if not isinstance(dets, list):
+            return "0.0.0.0"
+        for d in reversed(dets):
+            if isinstance(d, dict):
+                ip = d.get("src_ip")
+                if isinstance(ip, str) and ip and ip != "0.0.0.0":
+                    return ip
+        return "0.0.0.0"
+
+    def _aggregate_reason(self, decode_failures, match_reasons):
+        if decode_failures:
+            parts = ",".join(f"{k}={v}" for k, v in
+                             sorted(decode_failures.items()))
+            return f"decode_failures:{parts}"
+        if match_reasons:
+            parts = ",".join(f"{k}={v}" for k, v in
+                             sorted(match_reasons.items()))
+            return f"match_reasons:{parts}"
+        return ""
+
+    def _check_path(self, initial=False):
+        if isinstance(self.collector, (MetricsCollector, EventLogCollector)):
+            return
+        if isinstance(self.collector, FileCollector):
+            missing = not self.path or not os.path.isfile(self.path)
+            if missing and (initial or not self._path_was_missing):
+                self._path_was_missing = True
+            elif not missing and self._path_was_missing:
+                self._path_was_missing = False
+
+    def _safe_state(self):
+        try:
+            return self.collector.save_state()
+        except Exception:
+            return None
+
+
+# ----------------------------------------------------------------------
+# MonitorEngine
+# ----------------------------------------------------------------------
+class MonitorEngine:
+    def __init__(self):
+        self.workers: Dict[str, CapabilityWorker] = {}
+        self.cycle_count = 0
+
+    def _rebuild_workers(self, disabled_map: Dict):
+        config = load_config()
+        if not config:
+            return
+        names = _capabilities_for_layer(config, "layer1")
+        if not names:
+            return
+        for name in list(self.workers.keys()):
+            if name not in names:
+                del self.workers[name]
+        for name in names:
+            path = _capability_path(config, name)
+            rules = _capability_rules(config, name)
+            existing = self.workers.get(name)
+            if existing is not None:
+                if existing.path == path and existing.rules == rules:
+                    existing.disabled_map = disabled_map
+                    continue
+                del self.workers[name]
+            self.workers[name] = CapabilityWorker(
+                name, path, rules, disabled_map)
+
+    def _run_all(self):
+        for name, worker in self.workers.items():
+            try:
+                worker.run_cycle()
+            except Exception as e:
+                emit(name, LAYER, "error", f"worker error: {e}")
+
+    def run(self):
+        global _running
+        signal.signal(signal.SIGINT, _shutdown)
+        signal.signal(signal.SIGTERM, _shutdown)
+        ok, reason = _verify_lock_compatibility()
+        if not ok:
+            emit(SRC, LAYER, "error",
+                 f"lock compatibility check failed: {reason}")
+            sys.exit(1)
+        try:
+            while _running:
+                self.cycle_count += 1
+                disabled_map = _read_disabled_map()
+                try:
+                    self._rebuild_workers(disabled_map)
+                    self._run_all()
+                except Exception as e:
+                    emit(SRC, LAYER, "error",
+                         f"engine cycle error: {e}")
+                self._write_heartbeat()
+                sleep_total = self._cycle_sleep()
+                slept = 0.0
+                while _running and slept < sleep_total:
+                    time.sleep(0.5)
+                    slept += 0.5
+        finally:
+            self._remove_heartbeat()
+
+    def _write_heartbeat(self):
+        try:
+            os.makedirs(os.path.dirname(HEARTBEAT_FILE), exist_ok=True)
+            with open(HEARTBEAT_FILE, "w") as f:
+                f.write(str(time.time()))
+                try:
+                    f.flush()
+                    os.fsync(f.fileno())
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _remove_heartbeat(self):
+        try:
+            if os.path.exists(HEARTBEAT_FILE):
+                os.remove(HEARTBEAT_FILE)
+        except Exception:
+            pass
+
+    def _cycle_sleep(self) -> float:
+        state, data, _ = _bb_read_state_all()
+        if state != BB_OK:
+            return BASE_CYCLE_SECONDS
+        s = data.get("layer_3_state", {})
+        if not isinstance(s, dict):
+            return BASE_CYCLE_SECONDS
+        v = s.get("state", "GREEN")
+        if v == "RED":
+            return MIN_CYCLE_SECONDS
+        if v == "ORANGE":
+            return max(MIN_CYCLE_SECONDS, BASE_CYCLE_SECONDS // 2)
+        if v == "YELLOW":
+            return max(MIN_CYCLE_SECONDS, int(BASE_CYCLE_SECONDS * 0.75))
+        return min(MAX_CYCLE_SECONDS, BASE_CYCLE_SECONDS)
+
+
+def _shutdown(sig, frame):
+    global _running
+    _running = False
+
+
+def main():
+    if not os.path.exists(SYSTEM_CONFIG_FILE):
+        sys.exit(1)
+    if not os.path.exists(BLACKBOARD_FILE):
+        sys.exit(1)
+    MonitorEngine().run()
+
+
+if __name__ == "__main__":
+    main()
