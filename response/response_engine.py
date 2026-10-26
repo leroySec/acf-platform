@@ -830,7 +830,8 @@ class ResponseWorker:
 
         self.cycle_count = 0
         self.last_processed_key: Optional[Tuple[str, float]] = None
-        self._reader_cumulative_seen: Optional[int] = None
+        self._reader_cumulative_seen: Optional[int] = None 
+        self._layer1_cumulative_seen: Dict[str, int] = {}
 
         self._load_persisted_state()
         keep = []
@@ -929,6 +930,16 @@ class ResponseWorker:
             self._reader_cumulative_seen = int(v)
         else:
             self._reader_cumulative_seen = None
+
+        v = section.get("_layer_cumulative_seen")
+        if isinstance(v, dict):
+            self._layer1_cumulative_seen = {
+                k: int(val) for k, val in v.items()
+                if isinstance(k, str) and isinstance(val, (int, float))
+                and not isinstance(val, bool)
+            }
+        else: 
+            self._layer1_cumulative_seen = {}
 
     def _read_state(self) -> Optional[Tuple[str, int, str, float]]:
         section = _bb_read_section(self.state_section)
@@ -1080,9 +1091,19 @@ class ResponseWorker:
 
     def _fail2ban_sweep(self, now: float) -> None:
         ais = _bb_read_section(self.ais_section)
-        threats = ais.get("known_threats")
-        if not isinstance(threats, list):
-            return
+        ais_ts = _safe_float(ais.get("ais_timestamp"), 0.0)
+        ais_stale = (ais_ts <= 0.0
+                     or (now - ais_ts) > UPSTREAM_FRESH_SECONDS)
+        ais_healthy = ais.get("ais_healthy") is True
+
+        # G3-1: when AIS is stale or unhealthy, its known_threats
+        # cannot be trusted. Fall back to Layer 1 monitor evidence.
+        if ais_stale or not ais_healthy:
+            threats = self._synthesize_threats_from_layer1(now)
+        else:
+            threats = ais.get("known_threats")
+            if not isinstance(threats, list):
+                return
 
         for threat in threats:
             if not isinstance(threat, dict):
@@ -1130,6 +1151,98 @@ class ResponseWorker:
                 if self.method == "observe":
                     self.method = "netsh"
                 self._bounded_blocked_ips()
+
+    def _synthesize_threats_from_layer1(self, now: float) -> List[Dict]:
+        """
+        G3-1 fallback. Sources the attacker IP from multiple Layer 1
+        and reader evidence sources because no single one is
+        guaranteed to be populated. Uses the monitor cumulative
+        counter delta so the fallback fires even after the per-cycle
+        counter has dropped to zero.
+        """
+        reader_sec = _bb_read_section(self.reader_section)
+        attacker_ip = _safe_str(reader_sec.get("last_attacker_ip"), "")
+
+        if not _is_blockable_by_fail2ban(attacker_ip):
+            recent = reader_sec.get("recent_ips") or []
+            if isinstance(recent, list):
+                for candidate in reversed(recent):
+                    if (isinstance(candidate, str)
+                            and _is_blockable_by_fail2ban(candidate)):
+                        attacker_ip = candidate
+                        break
+
+        if not _is_blockable_by_fail2ban(attacker_ip):
+            groups_sec = _bb_read_section(f"layer_2_groups_{self.name}")
+            for g in groups_sec.get("source_groups", []) or []:
+                if isinstance(g, dict):
+                    candidate = g.get("actor")
+                    if (isinstance(candidate, str)
+                            and _is_blockable_by_fail2ban(candidate)):
+                        attacker_ip = candidate
+                        break
+
+        if not _is_blockable_by_fail2ban(attacker_ip):
+            events = reader_sec.get("recent_events") or []
+            if isinstance(events, list):
+                for event in reversed(events):
+                    if isinstance(event, dict):
+                        for candidate in (event.get("ips") or []):
+                            if (isinstance(candidate, str)
+                                    and _is_blockable_by_fail2ban(candidate)):
+                                attacker_ip = candidate
+                                break
+                    if _is_blockable_by_fail2ban(attacker_ip):
+                        break
+
+        out: List[Dict] = []
+        for section_name in self.layer1_candidates:
+            sec = _bb_read_section(section_name)
+            if not sec:
+                continue
+            ts = _safe_float(sec.get("monitoring_timestamp"), 0.0)
+            if ts <= 0.0:
+                ts = _safe_float(sec.get("sensor_timestamp"), 0.0)
+            if ts <= 0.0 or (now - ts) > UPSTREAM_FRESH_SECONDS:
+                continue
+            healthy = sec.get("monitor_healthy")
+            if healthy is None:
+                healthy = sec.get("sensor_healthy")
+            if healthy is not True:
+                continue
+
+            cumulative = _safe_int(
+                sec.get("last_failures_cumulative"), 0)
+            seen = self._layer1_cumulative_seen.get(section_name)
+            if seen is None:
+                # Cold start: no prior observation on this section.
+                # Treat all accumulated failures as signal. Matches
+                # the state engine's own fallback behaviour.
+                delta = cumulative
+            else:
+                delta = max(0, cumulative - seen)
+            self._layer1_cumulative_seen[section_name] = cumulative
+
+            if delta < self.fail2ban["maxretry"]:
+                continue
+
+            ip = _safe_str(sec.get("last_attacker_ip"), "")
+            if not _is_blockable_by_fail2ban(ip):
+                ip = attacker_ip
+            if not _is_blockable_by_fail2ban(ip):
+                continue
+
+            out.append({
+                "ip": ip,
+                "actor": ip,
+                "user": None,
+                "hits": delta,
+                "confidence": 100,
+                "source": "layer1_fallback",
+            })
+        return out
+
+    
 
     def _release_expired(self, now: float, current_state: str) -> None:
         rank = STATE_RANK.get(current_state, 0)
@@ -1314,6 +1427,8 @@ class ResponseWorker:
                 },
                 "version": Config.SCHEMA_VERSION,
                 "_reader_cumulative_seen": self._reader_cumulative_seen,
+                "_layer1_cumulative_seen": self._layer1_cumulative_seen,
+                
             })
             emit(SRC, LAYER, "warn",
                  f"Cycle {self.cycle_count} | no input; observing",
@@ -1335,6 +1450,8 @@ class ResponseWorker:
                 "actions": self.actions,
                 "method": self.method,
                 "_reader_cumulative_seen": self._reader_cumulative_seen,
+                "_layer1_cumulative_seen": self._layer1_cumulative_seen,
+                
             })
             return
 
@@ -1376,8 +1493,10 @@ class ResponseWorker:
             },
             "version": Config.SCHEMA_VERSION,
             "_reader_cumulative_seen": self._reader_cumulative_seen,
+            "_layer1_cumulative_seen": self._layer1_cumulative_seen,
+            
         })
-
+        
         try:
             with open(Config.LOG_FILE, "a") as f:
                 f.write(f"[{self.name}-RESP] {time.ctime()} | "
