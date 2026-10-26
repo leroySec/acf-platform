@@ -281,7 +281,7 @@ def discover_capabilities():
     if os.name == 'nt':
         if check_ssh_event_log_windows():
             ssh_available = True
-            ssh_path = "Windows Event Log (Security/OpenSSH)"
+            ssh_path = "Windows Event Log (OpenSSH/Operational)"
     else:
         if os.path.exists("/var/log/auth.log"):
             ssh_available = True
@@ -876,17 +876,20 @@ def safe_write_config(config_data, target_file):
         return False, str(e)
 
 
-def _merge_capability_rules(existing):
+def _merge_capability_rules(existing, capability_layers=None):
     """
     Preserve everything the operator has written under
     capability_rules.<cap> in system_config.json. Overwrite only the
     sensor sub-key, which this setup flow owns.
 
-    The preserved sub-keys include any operator-authored blocks such
-    as capability_rules.<cap>.fail2ban and
-    capability_rules.<cap>.shuffle. Those are consumed by the
-    response engine and the MTD actions at runtime; this flow does not
-    write them but it must not erase them.
+    SSH: the response engine (layer4a) reads
+    capability_rules.ssh.service_ports to know which ports to block,
+    and the MTD traffic_shuffle action (layer4c) reads
+    capability_rules.ssh.shuffle for its port pair and trigger
+    thresholds. Both keys are hard-coded requirements of those
+    layers. When absent, write framework defaults so a fresh
+    config_interactive run produces a working pipeline without
+    external editing. When present, preserve the operator's values.
     """
     rules = dict(existing) if isinstance(existing, dict) else {}
     rules["sensor"] = {
@@ -901,6 +904,31 @@ def _merge_capability_rules(existing):
             "memory_multiplier": 1.5,
         },
     }
+
+    ssh_rules = rules.get("ssh")
+    if not isinstance(ssh_rules, dict):
+        ssh_rules = {}
+
+    if "service_ports" not in ssh_rules:
+        ssh_rules["service_ports"] = [22]
+
+    if "shuffle" not in ssh_rules:
+        layer4c_selected = (
+            isinstance(capability_layers, dict)
+            and "ssh" in capability_layers
+            and isinstance(capability_layers["ssh"], list)
+            and "layer4c" in capability_layers["ssh"]
+        )
+        ssh_rules["shuffle"] = {
+            "enabled": layer4c_selected,
+            "primary_port": 22,
+            "alternate_port": 2222,
+            "trigger_distinct_attackers": 3,
+            "trigger_red_seconds": 300,
+            "restore_after_seconds": 1800,
+        }
+
+    rules["ssh"] = ssh_rules
     return rules
 
 
@@ -956,7 +984,7 @@ def save_config(enabled_caps, capability_layers, custom_paths,
         # capability_rules preserves operator-authored sub-keys
         # (fail2ban, shuffle, ...) across saves. Only the sensor
         # sub-key is owned and rewritten by this flow.
-        "capability_rules": _merge_capability_rules(capability_rules),
+        "capability_rules": _merge_capability_rules(capability_rules, capability_layers),
     }
 
     if os.path.exists(SYSTEM_CONFIG_FILE):
