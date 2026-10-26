@@ -358,6 +358,17 @@ def _run_ps(cmd: str, timeout: float = PS_TIMEOUT) -> Tuple[bool, str, str]:
 
 
 def _firewall_status(use_cache: bool = True) -> str:
+    """
+    Return one of:
+      _FW_AVAILABLE               — reachable and running
+      _FW_POWERSHELL_UNAVAILABLE  — no PowerShell binary on PATH
+      _FW_SERVICE_STOPPED         — service reports not running
+      _FW_UNKNOWN                 — could not determine
+
+    Cost: 0 process spawns when cache hit; up to 2 PowerShell
+    spawns on cache miss; plus 1 netsh spawn if the PowerShell
+    probes fail to determine status.
+    """
     global _CACHED_FW_STATUS
     now = time.time()
 
@@ -392,6 +403,21 @@ def _firewall_status(use_cache: bool = True) -> str:
             with _FW_STATUS_LOCK:
                 _CACHED_FW_STATUS = {"value": result, "at": now}
             return result
+
+    # G6-1 fallback: PowerShell service enumeration failed on both
+    # service names. On some Windows configurations Get-Service
+    # returns "unknown" for mpssvc/MpsSvc even though the firewall
+    # is functional and netsh can manipulate rules. Ask netsh
+    # directly. If netsh can respond to a firewall query, the
+    # firewall subsystem is operational and rule operations will
+    # succeed regardless of what Get-Service reported.
+    ok, out, _err = _run_netsh(
+        ["advfirewall", "show", "allprofiles", "state"])
+    if ok and (out or "").strip():
+        result = _FW_AVAILABLE
+        with _FW_STATUS_LOCK:
+            _CACHED_FW_STATUS = {"value": result, "at": now}
+        return result
 
     result = _FW_UNKNOWN
     with _FW_STATUS_LOCK:
