@@ -4,3 +4,4 @@ __pycache__/
 *.pyd
 commit_msg.txt
 system_config.json.tmp.*
+acf.log

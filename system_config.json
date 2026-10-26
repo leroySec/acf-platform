@@ -129,7 +129,7 @@
         "primary_port": 22,
         "alternate_port": 2222,
         "trigger_distinct_attackers": 3,
-        "trigger_red_seconds": 60,
+        "trigger_red_seconds": 300,
         "restore_after_seconds": 1800
       }
     },

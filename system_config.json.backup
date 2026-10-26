@@ -40,12 +40,16 @@
     "ssh": [
       "layer1",
       "layer2",
-      "layer3"
+      "layer3",
+      "layer4a",
+      "layer4c"
     ],
     "sensor": [
       "layer1",
       "layer2",
-      "layer3"
+      "layer3",
+      "layer4a",
+      "layer4c"
     ],
     "defender": [
       "layer1",
@@ -62,8 +66,8 @@
     "layer1": true,
     "layer2": true,
     "layer3": true,
-    "layer4a": false,
-    "layer4c": false,
+    "layer4a": true,
+    "layer4c": true,
     "layer5": false,
     "reader": true
   },
@@ -116,7 +120,18 @@
         {
           "event_id": 4625
         }
-      ]
+      ],
+      "service_ports": [
+        22
+      ],
+      "shuffle": {
+        "enabled": true,
+        "primary_port": 22,
+        "alternate_port": 2222,
+        "trigger_distinct_attackers": 3,
+        "trigger_red_seconds": 300,
+        "restore_after_seconds": 1800
+      }
     },
     "defender": {
       "type": "eventlog",
