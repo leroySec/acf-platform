@@ -215,25 +215,35 @@ def _coerce_bool(value: Any, default: bool) -> bool:
 
 
 def _resolve_service_ports(capability: str) -> List[int]:
+    """
+    Cost: file stat (cached). No subprocesses.
+
+    Falls back to port_registry when the config field is missing,
+    mirroring response_engine._resolve_service_ports' fallback to
+    _DEFAULT_SERVICE_PORTS. Without this fallback, MTD traffic_shuffle
+    silently fails to construct (supports() returns False) when a
+    fresh config_interactive run or any config gap omits
+    capability_rules.<cap>.service_ports.
+    """
     cfg = _load_system_config_cached()
     rules = cfg.get("capability_rules", {})
-    if not isinstance(rules, dict):
-        return []
-    entry = rules.get(capability)
-    if not isinstance(entry, dict):
-        return []
-    raw = entry.get("service_ports")
-    if not isinstance(raw, list):
-        return []
-    out: List[int] = []
-    for p in raw:
-        try:
-            n = int(p)
-        except (TypeError, ValueError):
-            continue
-        if 1 <= n <= 65535 and n not in out:
-            out.append(n)
-    return out
+    if isinstance(rules, dict):
+        entry = rules.get(capability)
+        if isinstance(entry, dict):
+            raw = entry.get("service_ports")
+            if isinstance(raw, list):
+                out: List[int] = []
+                for p in raw:
+                    try:
+                        n = int(p)
+                    except (TypeError, ValueError):
+                        continue
+                    if 1 <= n <= 65535 and n not in out:
+                        out.append(n)
+                if out:
+                    return out
+    fallback = port_registry.primary_port(capability)
+    return [fallback] if fallback > 0 else []
 
 
 def _resolve_shuffle_config(capability: str) -> Dict[str, Any]:
@@ -271,7 +281,10 @@ def _resolve_shuffle_config(capability: str) -> Dict[str, Any]:
         return out
     shuffle = entry.get("shuffle")
     if not isinstance(shuffle, dict):
-        return out
+        cap_layers = cfg.get("capability_layers", {}).get(capability, [])
+        if isinstance(cap_layers, list) and "layer4c" in cap_layers:
+            out["enabled"] = True
+            return out
 
     if "enabled" in shuffle:
         out["enabled"] = _coerce_bool(shuffle["enabled"], out["enabled"])
